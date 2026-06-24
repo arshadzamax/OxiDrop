@@ -124,20 +124,22 @@ function App() {
     peerConnRef.current = pc;
 
     const dc = pc.createDataChannel('file-transfer', { ordered: true });
+    dc.binaryType = 'arraybuffer'; // Force arraybuffer binary format
     dataChannelRef.current = dc;
 
     dc.onopen = () => {
       setIsUploading(true);
-      dc.onmessage = (e) => {
-        try {
-          const header = JSON.parse(e.data);
-          if (header.offset !== undefined) {
-            startFileStreaming(dc, header.offset);
-          }
-        } catch (err) {
-          console.error(err);
+    };
+
+    dc.onmessage = (e) => {
+      try {
+        const header = JSON.parse(e.data);
+        if (header.offset !== undefined) {
+          startFileStreaming(dc, header.offset);
         }
-      };
+      } catch (err) {
+        console.error(err);
+      }
     };
 
     dc.onclose = () => setIsUploading(false);
@@ -266,6 +268,7 @@ function App() {
 
     pc.ondatachannel = (event) => {
       const dc = event.channel;
+      dc.binaryType = 'arraybuffer'; // Force arraybuffer binary format
       dataChannelRef.current = dc;
 
       dc.onopen = () => {
