@@ -1,15 +1,49 @@
 import mongoose from 'mongoose';
+import { MONGODB_URI } from './config.js';
+import { logger } from './utils/logger.js';
 
-// MongoDB Connection: Sets up connection to the MongoDB metadata database.
+// Setup Mongoose configuration events
+mongoose.connection.on('connecting', () => {
+  logger.info('Connecting to MongoDB...');
+});
+
+mongoose.connection.on('connected', () => {
+  logger.info('MongoDB successfully connected.');
+});
+
+mongoose.connection.on('error', (err) => {
+  logger.error('MongoDB connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+  logger.warn('MongoDB connection disconnected! Attempting automatic reconnect...');
+});
+
+mongoose.connection.on('reconnected', () => {
+  logger.info('MongoDB connection restored.');
+});
+
 export const connectDB = async () => {
   try {
-    const connUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/oxidrop';
-    
-    // Connect to database
-    const conn = await mongoose.connect(connUri);
-    console.log(`MongoDB Connected: ${conn.connection.host}`);
+    const mongooseOpts = {
+      maxPoolSize: 10,                 // Up to 10 connections in pool
+      serverSelectionTimeoutMS: 5000,  // Keep trying for 5 seconds
+      socketTimeoutMS: 45000,          // Close inactive socket after 45 seconds
+      family: 4                        // Force IPv4
+    };
+
+    await mongoose.connect(MONGODB_URI, mongooseOpts);
   } catch (error) {
-    console.error(`MongoDB Connection Error: ${error.message}`);
-    process.exit(1); // Exit process with failure if DB connection is vital
+    logger.error('Failed to establish initial MongoDB connection:', error);
+    process.exit(1); // Fatal exit
+  }
+};
+
+export const disconnectDB = async () => {
+  try {
+    await mongoose.disconnect();
+    logger.info('MongoDB connection closed gracefully.');
+  } catch (error) {
+    logger.error('Error during MongoDB disconnect:', error);
   }
 };
