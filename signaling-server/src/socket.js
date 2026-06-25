@@ -280,8 +280,17 @@ export const initWebSocketServer = (httpServer) => {
             { userId: authenticatedUserId },
             { isOnline: false, socketId: null, lastSeen: new Date() }
           );
+          
+          // Prune database: Clean up files and pending requests when the sender goes offline
+          const userFiles = await File.find({ senderId: authenticatedUserId });
+          const fileIds = userFiles.map(f => f.fileId);
+          if (fileIds.length > 0) {
+            await File.deleteMany({ senderId: authenticatedUserId });
+            await Request.deleteMany({ fileId: { $in: fileIds } });
+            logger.info(`Pruned offline sender session details: ${fileIds.length} files removed.`);
+          }
         } catch (err) {
-          logger.error(`Database error setting online status false for user ${authenticatedUserId}: ${err.message}`);
+          logger.error(`Database error during session pruning for user ${authenticatedUserId}: ${err.message}`);
         }
       }
     });

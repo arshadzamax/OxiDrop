@@ -63,6 +63,25 @@ router.get('/health', asyncHandler(async (req, res) => {
   res.json(health);
 }));
 
+// Fetch WebRTC ICE Servers configuration (STUN/TURN)
+router.get('/webrtc/ice-servers', asyncHandler(async (req, res) => {
+  const iceServers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' }
+  ];
+
+  if (process.env.TURN_URL) {
+    iceServers.push({
+      urls: process.env.TURN_URL,
+      username: process.env.TURN_USERNAME || '',
+      credential: process.env.TURN_CREDENTIAL || ''
+    });
+  }
+
+  res.json({ iceServers });
+}));
+
 // 2. Register a File (Phase 1: Registration)
 router.post('/files', stageLimiter, asyncHandler(async (req, res) => {
   const { fileName, sizeBytes, autoApprove, senderId } = req.body;
@@ -88,7 +107,15 @@ router.post('/files', stageLimiter, asyncHandler(async (req, res) => {
     throw new AppError('Sender ID exceeds safety limit of 64 characters', 400);
   }
 
-  const fileId = crypto.randomBytes(6).toString('hex');
+  let fileId = req.body.fileId;
+  if (!fileId || typeof fileId !== 'string' || fileId.length !== 12) {
+    fileId = crypto.randomBytes(6).toString('hex');
+  } else {
+    fileId = fileId.trim().toLowerCase();
+  }
+
+  // Allow safe overwrite/upsert of existing file ID from the same sender session
+  await File.deleteOne({ fileId });
 
   const newFile = await File.create({
     fileId,
