@@ -1,32 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Share2, Download } from 'lucide-react';
+import { ArrowUpFromLine, ArrowDownToLine } from 'lucide-react';
 import './App.css';
 
-// Import our modular components
 import { Header } from './components/Header';
 import { ShareTab } from './components/ShareTab';
 import { ReceiveTab } from './components/ReceiveTab';
 import { TelemetryPanel } from './components/TelemetryPanel';
 
+const sanitizeFileName = (name) => {
+  if (typeof name !== 'string') return 'download_file';
+  const base = name.replace(/^.*[\\\/]/, '');
+  return base.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+};
+
 function App() {
-  // Global States
-  const [activeTab, setActiveTab] = useState('share'); // 'share' | 'receive'
+  const [activeTab, setActiveTab] = useState('share');
   const [userId] = useState(() => 'web-' + Math.random().toString(36).substr(2, 6));
   const [socketConnected, setSocketConnected] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
 
-  // Synchronize CSS class configurations to root documentElement on load/theme shift
   useEffect(() => {
     document.documentElement.className = theme + '-theme';
   }, [theme]);
 
   const toggleTheme = () => {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(nextTheme);
-    localStorage.setItem('theme', nextTheme);
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    localStorage.setItem('theme', next);
   };
-  
-  // Sender States
+
+  // Sender state
   const [selectedFile, setSelectedFile] = useState(null);
   const [registeredFileId, setRegisteredFileId] = useState('');
   const [copied, setCopied] = useState(false);
@@ -35,7 +38,7 @@ function App() {
   const [senderTransferSpeed, setSenderTransferSpeed] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
 
-  // Receiver States
+  // Receiver state
   const [fileIdInput, setFileIdInput] = useState('');
   const [receiverFileMeta, setReceiverFileMeta] = useState(null);
   const [isFetchingMeta, setIsFetchingMeta] = useState(false);
@@ -44,26 +47,21 @@ function App() {
   const [receiverTransferSpeed, setReceiverTransferSpeed] = useState(0);
   const [isDownloading, setIsDownloading] = useState(false);
 
-  // WebRTC Refs
+  // WebRTC refs
   const socketRef = useRef(null);
   const peerConnRef = useRef(null);
   const dataChannelRef = useRef(null);
-
-  // Stale Closure Prevention Refs
   const selectedFileRef = useRef(null);
   const receiverFileMetaRef = useRef(null);
 
-  // Synchronize state variables to refs to prevent stale closure reads in async WebRTC/WS handlers
-  useEffect(() => {
-    selectedFileRef.current = selectedFile;
-  }, [selectedFile]);
+  useEffect(() => { selectedFileRef.current = selectedFile; }, [selectedFile]);
+  useEffect(() => { receiverFileMetaRef.current = receiverFileMeta; }, [receiverFileMeta]);
 
-  useEffect(() => {
-    receiverFileMetaRef.current = receiverFileMeta;
-  }, [receiverFileMeta]);
-
-  const API_HOST = window.location.hostname === 'localhost' ? 'http://localhost:5000' : '';
-  const WS_HOST = window.location.hostname === 'localhost' ? 'ws://localhost:5000' : `ws://${window.location.host}`;
+  // Tauri v2 serves from tauri.localhost, not localhost — detect both
+  const isTauri = '__TAURI_INTERNALS__' in window;
+  const isLocal = window.location.hostname === 'localhost';
+  const API_HOST = (isTauri || isLocal) ? 'http://localhost:5000' : '';
+  const WS_HOST = (isTauri || isLocal) ? 'ws://localhost:5000' : `ws://${window.location.host}`;
 
   useEffect(() => {
     connectWebSocket();
@@ -74,29 +72,18 @@ function App() {
   }, []);
 
   const connectWebSocket = () => {
-    console.log('Connecting to WS:', WS_HOST);
     const ws = new WebSocket(WS_HOST);
     socketRef.current = ws;
-
     ws.onopen = () => {
       setSocketConnected(true);
-      ws.send(JSON.stringify({
-        type: 'register_user',
-        data: { userId }
-      }));
+      ws.send(JSON.stringify({ type: 'register_user', data: { userId } }));
     };
-
     ws.onmessage = async (event) => {
       try {
-        const msg = JSON.parse(event.data);
-        const { type, data } = msg;
-
+        const { type, data } = JSON.parse(event.data);
         switch (type) {
           case 'new_access_request':
-            setSenderRequests(prev => {
-              if (prev.some(r => r.requestId === data.requestId)) return prev;
-              return [...prev, data];
-            });
+            setSenderRequests(prev => prev.some(r => r.requestId === data.requestId) ? prev : [...prev, data]);
             break;
           case 'request_status_update':
             setRequestStatus(data.status);
@@ -107,163 +94,140 @@ function App() {
           case 'receive_answer':
             handleReceiveAnswer(data.answer);
             break;
-          default:
-            break;
         }
       } catch (err) {
-        console.error('Error on WS payload:', err);
+        console.error('WS parse error:', err);
       }
     };
-
     ws.onclose = () => {
       setSocketConnected(false);
-      setTimeout(connectWebSocket, 3000); // Reconnect loop
+      setTimeout(connectWebSocket, 3000);
     };
   };
 
   const cleanupWebRTC = () => {
-    if (dataChannelRef.current) {
-      dataChannelRef.current.close();
-      dataChannelRef.current = null;
-    }
-    if (peerConnRef.current) {
-      peerConnRef.current.close();
-      peerConnRef.current = null;
-    }
+    if (dataChannelRef.current) { dataChannelRef.current.close(); dataChannelRef.current = null; }
+    if (peerConnRef.current) { peerConnRef.current.close(); peerConnRef.current = null; }
   };
 
-  // --- SENDER WebRTC HANDLERS ---
+  // ── Sender handlers ──
 
   const handleApproveRequest = async (request) => {
-    socketRef.current.send(JSON.stringify({
-      type: 'approve_request',
-      data: { fileId: request.fileId, receiverId: request.receiverId }
-    }));
+    try {
+      socketRef.current.send(JSON.stringify({ type: 'approve_request', data: { fileId: request.fileId, receiverId: request.receiverId } }));
+      setSenderRequests(prev => prev.filter(r => r.requestId !== request.requestId));
+      cleanupWebRTC();
 
-    setSenderRequests(prev => prev.filter(r => r.requestId !== request.requestId));
-    cleanupWebRTC();
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      peerConnRef.current = pc;
 
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    });
-    peerConnRef.current = pc;
-
-    const dc = pc.createDataChannel('file-transfer', { ordered: true });
-    dc.binaryType = 'arraybuffer'; // Force arraybuffer binary format
-    dataChannelRef.current = dc;
-
-    dc.onopen = () => {
-      setIsUploading(true);
-    };
-
-    dc.onmessage = (e) => {
-      try {
-        const header = JSON.parse(e.data);
-        if (header.offset !== undefined) {
-          startFileStreaming(dc, header.offset);
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+          cleanupWebRTC();
+          setIsUploading(false);
+          setSenderTransferSpeed(0);
         }
-      } catch (err) {
-        console.error(err);
-      }
-    };
+      };
 
-    dc.onclose = () => setIsUploading(false);
+      const dc = pc.createDataChannel('file-transfer', { ordered: true });
+      dc.binaryType = 'arraybuffer';
+      dataChannelRef.current = dc;
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+      dc.onopen = () => setIsUploading(true);
+      dc.onmessage = (e) => { try { const h = JSON.parse(e.data); if (h.offset !== undefined) startFileStreaming(dc, h.offset); } catch {} };
+      dc.onclose = () => {
+        setIsUploading(false);
+        setSenderTransferSpeed(0);
+      };
 
-    // Wait for ICE complete (Vanilla ICE)
-    await new Promise((resolve) => {
-      if (pc.iceGatheringState === 'complete') resolve();
-      else {
-        const checkGathering = () => {
-          if (pc.iceGatheringState === 'complete') {
-            pc.removeEventListener('icegatheringstatechange', checkGathering);
-            resolve();
-          }
-        };
-        pc.addEventListener('icegatheringstatechange', checkGathering);
-      }
-    });
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
 
-    socketRef.current.send(JSON.stringify({
-      type: 'send_offer',
-      data: { toUserId: request.receiverId, offer: pc.localDescription.sdp }
-    }));
+      await new Promise((resolve) => {
+        if (pc.iceGatheringState === 'complete') resolve();
+        else {
+          const check = () => { if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', check); resolve(); } };
+          pc.addEventListener('icegatheringstatechange', check);
+        }
+      });
+
+      socketRef.current.send(JSON.stringify({ type: 'send_offer', data: { toUserId: request.receiverId, offer: pc.localDescription.sdp } }));
+    } catch (err) {
+      console.error('Error in handleApproveRequest:', err);
+      setIsUploading(false);
+      setSenderTransferSpeed(0);
+      alert('Failed to establish WebRTC connection: ' + err.message);
+    }
   };
 
   const handleReceiveAnswer = async (sdpAnswer) => {
     if (!peerConnRef.current) return;
-    await peerConnRef.current.setRemoteDescription(new RTCSessionDescription({
-      type: 'answer',
-      sdp: sdpAnswer
-    }));
+    try {
+      await peerConnRef.current.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sdpAnswer }));
+    } catch (err) {
+      console.error('Error setting remote description:', err);
+      cleanupWebRTC();
+      setIsUploading(false);
+      setSenderTransferSpeed(0);
+    }
   };
 
   const startFileStreaming = (dc, offset) => {
     if (!selectedFileRef.current) return;
-
     const file = selectedFileRef.current;
-    const chunkSize = 65536; // 64KB
+    const chunkSize = 65536;
     let currentOffset = offset;
-    let bytesSentInSecond = 0;
+    let bytesSent = 0;
     let lastTime = performance.now();
 
-    const streamChunk = () => {
+    const stream = () => {
       while (currentOffset < file.size) {
-        // BACKPRESSURE
-        if (dc.bufferedAmount > 8 * 1024 * 1024) {
-          setTimeout(streamChunk, 15);
-          return;
-        }
-
+        if (dc.bufferedAmount > 8 * 1024 * 1024) { setTimeout(stream, 15); return; }
         const slice = file.slice(currentOffset, currentOffset + chunkSize);
         const reader = new FileReader();
-        
         reader.onload = (event) => {
           if (dc.readyState !== 'open') return;
-          const chunkData = event.target.result;
-          dc.send(chunkData);
-
-          currentOffset += chunkData.byteLength;
-          bytesSentInSecond += chunkData.byteLength;
-          
+          const chunk = event.target.result;
+          try {
+            dc.send(chunk);
+          } catch (e) {
+            console.error('Failed to send chunk via WebRTC:', e);
+            cleanupWebRTC();
+            setIsUploading(false);
+            setSenderTransferSpeed(0);
+            return;
+          }
+          currentOffset += chunk.byteLength;
+          bytesSent += chunk.byteLength;
           const now = performance.now();
           if (now - lastTime >= 1000) {
-            const speed = (bytesSentInSecond / (1024 * 1024)) / ((now - lastTime) / 1000);
-            setSenderTransferSpeed(speed.toFixed(2));
-            bytesSentInSecond = 0;
+            setSenderTransferSpeed(((bytesSent / (1024 * 1024)) / ((now - lastTime) / 1000)).toFixed(2));
+            bytesSent = 0;
             lastTime = now;
           }
-
           setSenderProgress(Math.round((currentOffset / file.size) * 100));
-          streamChunk();
+          stream();
         };
-
         reader.readAsArrayBuffer(slice);
         return;
       }
       setSenderProgress(100);
     };
-
-    streamChunk();
+    stream();
   };
 
-  // --- RECEIVER WebRTC HANDLERS ---
+  // ── Receiver handlers ──
 
   const handleFetchMetadata = async () => {
     if (!fileIdInput) return;
     setIsFetchingMeta(true);
     setReceiverFileMeta(null);
     setRequestStatus('');
-    
     try {
-      const response = await fetch(`${API_HOST}/api/files/${fileIdInput.trim()}`);
-      if (!response.ok) throw new Error('File not found');
-      const data = await response.json();
-      setReceiverFileMeta(data);
-    } catch (err) {
-      console.error(err);
+      const res = await fetch(`${API_HOST}/api/files/${fileIdInput.trim()}`);
+      if (!res.ok) throw new Error('Not found');
+      setReceiverFileMeta(await res.json());
+    } catch {
       alert('File ID not found.');
     } finally {
       setIsFetchingMeta(false);
@@ -272,116 +236,87 @@ function App() {
 
   const handleRequestAccess = () => {
     if (!receiverFileMeta) return;
-    socketRef.current.send(JSON.stringify({
-      type: 'request_access',
-      data: { fileId: receiverFileMeta.fileId, receiverId: userId }
-    }));
+    socketRef.current.send(JSON.stringify({ type: 'request_access', data: { fileId: receiverFileMeta.fileId, receiverId: userId } }));
   };
 
   const handleReceiveOffer = async (sdpOffer, senderId) => {
-    cleanupWebRTC();
+    try {
+      cleanupWebRTC();
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      peerConnRef.current = pc;
 
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    });
-    peerConnRef.current = pc;
-
-    let receivedBuffer = [];
-    let receivedBytes = 0;
-    let bytesReceivedInSecond = 0;
-    let lastTime = performance.now();
-
-    pc.ondatachannel = (event) => {
-      const dc = event.channel;
-      dc.binaryType = 'arraybuffer'; // Force arraybuffer binary format
-      dataChannelRef.current = dc;
-
-      const handleOpen = () => {
-        setIsDownloading(true);
-        dc.send(JSON.stringify({ offset: 0 }));
-      };
-
-      if (dc.readyState === 'open') {
-        handleOpen();
-      } else {
-        dc.onopen = handleOpen;
-      }
-
-      dc.onmessage = (e) => {
-        const chunk = e.data;
-        receivedBuffer.push(chunk);
-        receivedBytes += chunk.byteLength;
-        bytesReceivedInSecond += chunk.byteLength;
-
-        const now = performance.now();
-        if (now - lastTime >= 1000) {
-          const speed = (bytesReceivedInSecond / (1024 * 1024)) / ((now - lastTime) / 1000);
-          setReceiverTransferSpeed(speed.toFixed(2));
-          bytesReceivedInSecond = 0;
-          lastTime = now;
-        }
-
-        const meta = receiverFileMetaRef.current;
-        if (!meta) {
-          console.error("Stale closure prevention: receiverFileMetaRef is null inside onmessage callback.");
-          return;
-        }
-
-        const progress = Math.round((receivedBytes / meta.sizeBytes) * 100);
-        setReceiverProgress(progress);
-
-        if (receivedBytes >= meta.sizeBytes) {
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+          cleanupWebRTC();
           setIsDownloading(false);
-          setReceiverProgress(100);
-
-          const fileBlob = new Blob(receivedBuffer);
-          const downloadUrl = URL.createObjectURL(fileBlob);
-          
-          const a = document.createElement('a');
-          a.href = downloadUrl;
-          a.download = meta.fileName;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          
-          socketRef.current.send(JSON.stringify({
-            type: 'transfer_completed',
-            data: { fileId: meta.fileId, receiverId: userId }
-          }));
+          setReceiverTransferSpeed(0);
         }
       };
 
-      dc.onclose = () => setIsDownloading(false);
-    };
+      let buf = [], received = 0, bytesInSec = 0, lastTime = performance.now();
 
-    await pc.setRemoteDescription(new RTCSessionDescription({
-      type: 'offer',
-      sdp: sdpOffer
-    }));
+      pc.ondatachannel = (event) => {
+        const dc = event.channel;
+        dc.binaryType = 'arraybuffer';
+        dataChannelRef.current = dc;
 
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+        const onOpen = () => { setIsDownloading(true); dc.send(JSON.stringify({ offset: 0 })); };
+        if (dc.readyState === 'open') onOpen(); else dc.onopen = onOpen;
 
-    await new Promise((resolve) => {
-      if (pc.iceGatheringState === 'complete') resolve();
-      else {
-        const checkGathering = () => {
-          if (pc.iceGatheringState === 'complete') {
-            pc.removeEventListener('icegatheringstatechange', checkGathering);
-            resolve();
+        dc.onmessage = (e) => {
+          buf.push(e.data);
+          received += e.data.byteLength;
+          bytesInSec += e.data.byteLength;
+          const now = performance.now();
+          if (now - lastTime >= 1000) {
+            setReceiverTransferSpeed(((bytesInSec / (1024 * 1024)) / ((now - lastTime) / 1000)).toFixed(2));
+            bytesInSec = 0;
+            lastTime = now;
+          }
+          const meta = receiverFileMetaRef.current;
+          if (!meta) return;
+          setReceiverProgress(Math.round((received / meta.sizeBytes) * 100));
+          if (received >= meta.sizeBytes) {
+            setIsDownloading(false);
+            setReceiverProgress(100);
+            setReceiverTransferSpeed(0);
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob(buf));
+            a.download = sanitizeFileName(meta.fileName);
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            socketRef.current.send(JSON.stringify({ type: 'transfer_completed', data: { fileId: meta.fileId, receiverId: userId } }));
           }
         };
-        pc.addEventListener('icegatheringstatechange', checkGathering);
-      }
-    });
+        dc.onclose = () => {
+          setIsDownloading(false);
+          setReceiverTransferSpeed(0);
+        };
+      };
 
-    socketRef.current.send(JSON.stringify({
-      type: 'send_answer',
-      data: { toUserId: senderId, answer: pc.localDescription.sdp }
-    }));
+      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sdpOffer }));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      await new Promise((resolve) => {
+        if (pc.iceGatheringState === 'complete') resolve();
+        else {
+          const check = () => { if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', check); resolve(); } };
+          pc.addEventListener('icegatheringstatechange', check);
+        }
+      });
+
+      socketRef.current.send(JSON.stringify({ type: 'send_answer', data: { toUserId: senderId, answer: pc.localDescription.sdp } }));
+    } catch (err) {
+      console.error('Error in handleReceiveOffer:', err);
+      cleanupWebRTC();
+      setIsDownloading(false);
+      setReceiverTransferSpeed(0);
+    }
   };
 
-  // --- UI Utilities ---
+  // ── UI helpers ──
 
   const handleFileChange = (e) => {
     if (e.target.files.length > 0) {
@@ -396,24 +331,15 @@ function App() {
   const handleRegisterFile = async () => {
     if (!selectedFile) return;
     setRegisteredFileId('');
-
     try {
-      const response = await fetch(`${API_HOST}/api/files`, {
+      const res = await fetch(`${API_HOST}/api/files`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: selectedFile.name,
-          sizeBytes: selectedFile.size,
-          senderId: userId,
-          autoApprove: true
-        })
+        body: JSON.stringify({ fileName: selectedFile.name, sizeBytes: selectedFile.size, senderId: userId, autoApprove: true })
       });
-
-      if (!response.ok) throw new Error('File registration failed');
-      const data = await response.json();
-      setRegisteredFileId(data.fileId);
-    } catch (err) {
-      console.error(err);
+      if (!res.ok) throw new Error('Failed');
+      setRegisteredFileId((await res.json()).fileId);
+    } catch {
       alert('Error registering file.');
     }
   };
@@ -425,80 +351,54 @@ function App() {
   };
 
   const formatBytes = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    if (bytes === 0) return '0 B';
+    const k = 1024, s = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + s[i];
   };
 
   return (
-    <div className="container">
-      <Header 
-        socketConnected={socketConnected} 
-        userId={userId} 
-        theme={theme} 
-        toggleTheme={toggleTheme} 
-      />
+    <div className="app">
+      <Header socketConnected={socketConnected} userId={userId} theme={theme} toggleTheme={toggleTheme} />
 
-      <main className="w-full max-w-4xl flex-grow flex flex-col gap-6">
-        <div className="tab-group">
-          <button 
-            className={`tab-btn ${activeTab === 'share' ? 'active' : ''}`}
-            onClick={() => setActiveTab('share')}
-          >
-            <Share2 className="w-4 h-4 inline mr-2" /> Share Files
+      <main className="main">
+        <div className="tabs">
+          <button className={`tab ${activeTab === 'share' ? 'active' : ''}`} onClick={() => setActiveTab('share')}>
+            <ArrowUpFromLine size={14} /> Send
           </button>
-          <button 
-            className={`tab-btn ${activeTab === 'receive' ? 'active' : ''}`}
-            onClick={() => setActiveTab('receive')}
-          >
-            <Download className="w-4 h-4 inline mr-2" /> Retrieve Files
+          <button className={`tab ${activeTab === 'receive' ? 'active' : ''}`} onClick={() => setActiveTab('receive')}>
+            <ArrowDownToLine size={14} /> Receive
           </button>
         </div>
 
-        {activeTab === 'share' ? (
-          <ShareTab 
-            selectedFile={selectedFile}
-            handleFileChange={handleFileChange}
-            registeredFileId={registeredFileId}
-            isRegistering={false}
-            handleRegisterFile={handleRegisterFile}
-            copied={copied}
-            copyToClipboard={copyToClipboard}
-            senderRequests={senderRequests}
-            handleApproveRequest={handleApproveRequest}
-            formatBytes={formatBytes}
-          />
-        ) : (
-          <ReceiveTab 
-            fileIdInput={fileIdInput}
-            setFileIdInput={setFileIdInput}
-            receiverFileMeta={receiverFileMeta}
-            isFetchingMeta={isFetchingMeta}
-            handleFetchMetadata={handleFetchMetadata}
-            requestStatus={requestStatus}
-            handleRequestAccess={handleRequestAccess}
-            formatBytes={formatBytes}
-          />
-        )}
-
-        <TelemetryPanel 
-          isTransferring={activeTab === 'share' ? isUploading : isDownloading}
-          transferMode={activeTab === 'share' ? 'upload' : 'download'}
-          fileName={activeTab === 'share' ? selectedFile?.name : receiverFileMeta?.fileName}
-          progress={activeTab === 'share' ? senderProgress : receiverProgress}
-          speed={activeTab === 'share' ? senderTransferSpeed : receiverTransferSpeed}
-        />
+        <div className="content">
+          {activeTab === 'share' ? (
+            <ShareTab
+              selectedFile={selectedFile} handleFileChange={handleFileChange}
+              registeredFileId={registeredFileId} isRegistering={false}
+              handleRegisterFile={handleRegisterFile} copied={copied}
+              copyToClipboard={copyToClipboard} senderRequests={senderRequests}
+              handleApproveRequest={handleApproveRequest} formatBytes={formatBytes}
+            />
+          ) : (
+            <ReceiveTab
+              fileIdInput={fileIdInput} setFileIdInput={setFileIdInput}
+              receiverFileMeta={receiverFileMeta} isFetchingMeta={isFetchingMeta}
+              handleFetchMetadata={handleFetchMetadata} requestStatus={requestStatus}
+              handleRequestAccess={handleRequestAccess} formatBytes={formatBytes}
+            />
+          )}
+        </div>
       </main>
 
-      <footer className="w-full max-w-4xl py-6 border-t border-[var(--border)] text-center text-xs text-[var(--text-muted)] flex flex-col md:flex-row items-center justify-between gap-4 mt-8">
-        <p>© 2026 OxiDrop Platform. End-to-end encrypted direct peer transfer.</p>
-        <div className="flex items-center gap-4">
-          <a href="#" className="hover:underline transition">Security Protocol</a>
-          <a href="#" className="hover:underline transition">System Architecture</a>
-        </div>
-      </footer>
+      <TelemetryPanel
+        isTransferring={activeTab === 'share' ? isUploading : isDownloading}
+        transferMode={activeTab === 'share' ? 'upload' : 'download'}
+        fileName={activeTab === 'share' ? selectedFile?.name : receiverFileMeta?.fileName}
+        progress={activeTab === 'share' ? senderProgress : receiverProgress}
+        speed={activeTab === 'share' ? senderTransferSpeed : receiverTransferSpeed}
+        totalSize={activeTab === 'share' ? selectedFile?.size : receiverFileMeta?.sizeBytes}
+      />
     </div>
   );
 }
