@@ -1,8 +1,3 @@
-Bismillah.
-
-Here is the complete, end-to-end architectural document for the P2P File-Sharing System. This markdown file covers everything from the High-Level Design (HLD) down to the Low-Level Design (LLD), incorporating the asynchronous request queue and performance optimizations.
-
-You can directly copy this into a `README.md` or a system design documentation file.
 
 ---
 
