@@ -271,10 +271,16 @@ function App() {
       dc.binaryType = 'arraybuffer'; // Force arraybuffer binary format
       dataChannelRef.current = dc;
 
-      dc.onopen = () => {
+      const handleOpen = () => {
         setIsDownloading(true);
         dc.send(JSON.stringify({ offset: 0 }));
       };
+
+      if (dc.readyState === 'open') {
+        handleOpen();
+      } else {
+        dc.onopen = handleOpen;
+      }
 
       dc.onmessage = (e) => {
         const chunk = e.data;
