@@ -37,6 +37,19 @@ function App() {
   const peerConnRef = useRef(null);
   const dataChannelRef = useRef(null);
 
+  // Stale Closure Prevention Refs
+  const selectedFileRef = useRef(null);
+  const receiverFileMetaRef = useRef(null);
+
+  // Synchronize state variables to refs to prevent stale closure reads in async WebRTC/WS handlers
+  useEffect(() => {
+    selectedFileRef.current = selectedFile;
+  }, [selectedFile]);
+
+  useEffect(() => {
+    receiverFileMetaRef.current = receiverFileMeta;
+  }, [receiverFileMeta]);
+
   const API_HOST = window.location.hostname === 'localhost' ? 'http://localhost:5000' : '';
   const WS_HOST = window.location.hostname === 'localhost' ? 'ws://localhost:5000' : `ws://${window.location.host}`;
 
@@ -176,9 +189,9 @@ function App() {
   };
 
   const startFileStreaming = (dc, offset) => {
-    if (!selectedFile) return;
+    if (!selectedFileRef.current) return;
 
-    const file = selectedFile;
+    const file = selectedFileRef.current;
     const chunkSize = 65536; // 64KB
     let currentOffset = offset;
     let bytesSentInSecond = 0;
@@ -296,10 +309,16 @@ function App() {
           lastTime = now;
         }
 
-        const progress = Math.round((receivedBytes / receiverFileMeta.sizeBytes) * 100);
+        const meta = receiverFileMetaRef.current;
+        if (!meta) {
+          console.error("Stale closure prevention: receiverFileMetaRef is null inside onmessage callback.");
+          return;
+        }
+
+        const progress = Math.round((receivedBytes / meta.sizeBytes) * 100);
         setReceiverProgress(progress);
 
-        if (receivedBytes >= receiverFileMeta.sizeBytes) {
+        if (receivedBytes >= meta.sizeBytes) {
           setIsDownloading(false);
           setReceiverProgress(100);
 
@@ -308,14 +327,14 @@ function App() {
           
           const a = document.createElement('a');
           a.href = downloadUrl;
-          a.download = receiverFileMeta.fileName;
+          a.download = meta.fileName;
           document.body.appendChild(a);
           a.click();
           a.remove();
           
           socketRef.current.send(JSON.stringify({
             type: 'transfer_completed',
-            data: { fileId: receiverFileMeta.fileId, receiverId: userId }
+            data: { fileId: meta.fileId, receiverId: userId }
           }));
         }
       };
