@@ -13,6 +13,18 @@ function App() {
   const [activeTab, setActiveTab] = useState('share'); // 'share' | 'receive'
   const [userId] = useState(() => 'web-' + Math.random().toString(36).substr(2, 6));
   const [socketConnected, setSocketConnected] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+
+  // Synchronize CSS class configurations to root documentElement on load/theme shift
+  useEffect(() => {
+    document.documentElement.className = theme + '-theme';
+  }, [theme]);
+
+  const toggleTheme = () => {
+    const nextTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(nextTheme);
+    localStorage.setItem('theme', nextTheme);
+  };
   
   // Sender States
   const [selectedFile, setSelectedFile] = useState(null);
@@ -421,19 +433,24 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-between p-4 md:p-8">
-      <Header socketConnected={socketConnected} userId={userId} />
+    <div className="container">
+      <Header 
+        socketConnected={socketConnected} 
+        userId={userId} 
+        theme={theme} 
+        toggleTheme={toggleTheme} 
+      />
 
       <main className="w-full max-w-4xl flex-grow flex flex-col gap-6">
-        <div className="flex bg-white/5 p-1.5 rounded-2xl border border-white/5 backdrop-blur-md max-w-md mx-auto w-full mb-4">
+        <div className="tab-group">
           <button 
-            className={`flex-1 py-3 text-sm rounded-xl transition ${activeTab === 'share' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' : 'text-slate-400 hover:text-slate-200'}`}
+            className={`tab-btn ${activeTab === 'share' ? 'active' : ''}`}
             onClick={() => setActiveTab('share')}
           >
             <Share2 className="w-4 h-4 inline mr-2" /> Share Files
           </button>
           <button 
-            className={`flex-1 py-3 text-sm rounded-xl transition ${activeTab === 'receive' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' : 'text-slate-400 hover:text-slate-200'}`}
+            className={`tab-btn ${activeTab === 'receive' ? 'active' : ''}`}
             onClick={() => setActiveTab('receive')}
           >
             <Download className="w-4 h-4 inline mr-2" /> Retrieve Files
@@ -475,11 +492,11 @@ function App() {
         />
       </main>
 
-      <footer className="w-full max-w-4xl py-6 border-t border-white/5 text-center text-xs text-slate-500 flex flex-col md:flex-row items-center justify-between gap-4 mt-8">
+      <footer className="w-full max-w-4xl py-6 border-t border-[var(--border)] text-center text-xs text-[var(--text-muted)] flex flex-col md:flex-row items-center justify-between gap-4 mt-8">
         <p>© 2026 OxiDrop Platform. End-to-end encrypted direct peer transfer.</p>
         <div className="flex items-center gap-4">
-          <a href="#" className="hover:text-indigo-400 transition">Security Protocol</a>
-          <a href="#" className="hover:text-indigo-400 transition">System Architecture</a>
+          <a href="#" className="hover:underline transition">Security Protocol</a>
+          <a href="#" className="hover:underline transition">System Architecture</a>
         </div>
       </footer>
     </div>
