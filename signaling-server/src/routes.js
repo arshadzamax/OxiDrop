@@ -84,7 +84,7 @@ router.get('/webrtc/ice-servers', asyncHandler(async (req, res) => {
 
 // 2. Register a File (Phase 1: Registration)
 router.post('/files', stageLimiter, asyncHandler(async (req, res) => {
-  const { fileName, sizeBytes, autoApprove, senderId } = req.body;
+  const { fileName, sizeBytes, autoApprove, senderId, existingFileId } = req.body;
 
   // STRICT INPUT VALIDATION
   if (!fileName || typeof fileName !== 'string' || fileName.trim() === '') {
