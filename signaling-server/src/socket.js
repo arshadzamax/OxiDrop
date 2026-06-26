@@ -254,6 +254,15 @@ export const initWebSocketServer = (httpServer) => {
               { status: 'COMPLETED' }
             );
             logger.info(`Transfer of file ${cleanFileId} to receiver ${cleanReceiverId} completed successfully.`);
+
+            // Relay the completion event back to the sender
+            const fileRecord = await File.findOne({ fileId: cleanFileId });
+            if (fileRecord) {
+              const senderWs = clients.get(fileRecord.senderId);
+              if (senderWs) {
+                sendJson(senderWs, 'transfer_completed', { fileId: cleanFileId, receiverId: cleanReceiverId });
+              }
+            }
             break;
           }
 
