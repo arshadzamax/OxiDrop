@@ -1,7 +1,7 @@
 import React from 'react';
-import { Sun, Moon } from 'lucide-react';
+import { Sun, Moon, Terminal } from 'lucide-react';
 
-export function Header({ socketConnected, userId, theme, toggleTheme }) {
+export function Header({ socketConnected, userId, theme, toggleTheme, showConsole, setShowConsole }) {
   return (
     <header className="header">
       <div className="header-left">
@@ -14,6 +14,9 @@ export function Header({ socketConnected, userId, theme, toggleTheme }) {
           {socketConnected ? 'Connected' : 'Offline'}
         </div>
         <span className="node-id">{userId}</span>
+        <button onClick={() => setShowConsole(!showConsole)} className={`icon-btn ${showConsole ? 'active' : ''}`} aria-label="Toggle developer console" title="Toggle Developer Console">
+          <Terminal size={14} />
+        </button>
         <button onClick={toggleTheme} className="icon-btn" aria-label="Toggle theme">
           {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
         </button>

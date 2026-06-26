@@ -6,11 +6,13 @@ import { Header } from './components/Header';
 import { ShareTab } from './components/ShareTab';
 import { ReceiveTab } from './components/ReceiveTab';
 import { TelemetryPanel } from './components/TelemetryPanel';
+import { DeveloperConsole } from './components/DeveloperConsole';
 import { useOxiDrop } from './hooks/useOxiDrop';
 import { formatBytes } from './utils/helpers';
 
 function App() {
   const [activeTab, setActiveTab] = useState('share');
+  const [showConsole, setShowConsole] = useState(false);
   
   const {
     userId,
@@ -32,6 +34,9 @@ function App() {
     receiverProgress,
     receiverTransferSpeed,
     isDownloading,
+    webrtcStats,
+    devLogs,
+    clearDevLogs,
     handleApproveRequest,
     handleFileChange,
     handleRegisterFile,
@@ -43,7 +48,14 @@ function App() {
 
   return (
     <div className="app">
-      <Header socketConnected={socketConnected} userId={userId} theme={theme} toggleTheme={toggleTheme} />
+      <Header 
+        socketConnected={socketConnected} 
+        userId={userId} 
+        theme={theme} 
+        toggleTheme={toggleTheme} 
+        showConsole={showConsole} 
+        setShowConsole={setShowConsole} 
+      />
 
       {/* Floating non-blocking custom SnackBar/Toast alerts */}
       <div className="toast-container">
@@ -83,6 +95,13 @@ function App() {
           )}
         </div>
       </main>
+      {showConsole && (
+        <DeveloperConsole
+          logs={devLogs}
+          onClear={clearDevLogs}
+          onClose={() => setShowConsole(false)}
+        />
+      )}
 
       <TelemetryPanel
         isTransferring={activeTab === 'share' ? isUploading : isDownloading}
@@ -91,6 +110,7 @@ function App() {
         progress={activeTab === 'share' ? senderProgress : receiverProgress}
         speed={activeTab === 'share' ? senderTransferSpeed : receiverTransferSpeed}
         totalSize={activeTab === 'share' ? selectedFile?.size : receiverFileMeta?.sizeBytes}
+        webrtcStats={webrtcStats}
       />
     </div>
   );

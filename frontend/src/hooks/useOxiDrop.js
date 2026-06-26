@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { sanitizeFileName } from '../utils/helpers';
+import { sanitizeFileName, formatBytes } from '../utils/helpers';
 
 export function useOxiDrop() {
   const [userId] = useState(() => {
@@ -53,7 +53,29 @@ export function useOxiDrop() {
   const [receiverTransferSpeed, setReceiverTransferSpeed] = useState(0);
   const [isDownloading, setIsDownloading] = useState(false);
 
+  // WebRTC Diagnostics stats
+  const [webrtcStats, setWebrtcStats] = useState({
+    active: false,
+    connectionState: 'new',
+    iceConnectionState: 'new',
+    localCandidateType: '—',
+    remoteCandidateType: '—',
+    connectionType: '—',
+    rtt: null,
+    bytesSent: 0,
+    bytesReceived: 0
+  });
+
+  // Developer Console Logs state
+  const [devLogs, setDevLogs] = useState([]);
+  const addDevLog = (message, category = 'system') => {
+    const time = new Date().toTimeString().split(' ')[0];
+    setDevLogs(prev => [...prev.slice(-199), { time, message, category }]);
+  };
+  const clearDevLogs = () => setDevLogs([]);
+
   // WebRTC & File streaming refs
+  const statsIntervalRef = useRef(null);
   const socketRef = useRef(null);
   const peerConnRef = useRef(null);
   const dataChannelRef = useRef(null);
@@ -124,14 +146,17 @@ export function useOxiDrop() {
   }, []);
 
   const connectWebSocket = () => {
+    addDevLog('Initializing WebSocket connection to: ' + WS_HOST, 'signaling');
     const ws = new WebSocket(WS_HOST);
     socketRef.current = ws;
     ws.onopen = () => {
       setSocketConnected(true);
+      addDevLog('WebSocket connection opened. Registering user session: ' + userId, 'signaling');
       ws.send(JSON.stringify({ type: 'register_user', data: { userId } }));
       
       // Auto-re-register files on WebSocket reconnect events
       if (selectedFileRef.current && registeredFileIdRef.current) {
+        addDevLog('Auto-re-registering file ' + selectedFileRef.current.name + ' after reconnection.', 'signaling');
         reRegisterFile();
       }
     };
@@ -140,27 +165,41 @@ export function useOxiDrop() {
         const { type, data } = JSON.parse(event.data);
         switch (type) {
           case 'new_access_request':
+            addDevLog('Received download access request from peer: ' + data.receiverId, 'signaling');
             setSenderRequests(prev => prev.some(r => r.requestId === data.requestId) ? prev : [...prev, data]);
             break;
           case 'request_status_update':
+            addDevLog('File request status updated to: ' + data.status, 'signaling');
             setRequestStatus(data.status);
             break;
           case 'receive_offer':
+            addDevLog('Received WebRTC SDP Offer from ' + data.fromUserId, 'signaling');
             handleReceiveOffer(data.offer, data.fromUserId);
             break;
           case 'receive_answer':
+            addDevLog('Received WebRTC SDP Answer from peer.', 'signaling');
             handleReceiveAnswer(data.answer);
             break;
           case 'receive_ice_candidate':
+            addDevLog('Received remote ICE candidate from signaling server.', 'ice');
             handleReceiveIceCandidate(data.candidate);
+            break;
+          case 'transfer_completed':
+            addDevLog('Received transfer_completed confirmation from receiver.', 'stream');
+            addNotification('File transfer completed successfully!', 'success');
+            cleanupWebRTC();
+            setIsUploading(false);
+            setSenderTransferSpeed(0);
             break;
         }
       } catch (err) {
+        addDevLog('WebSocket message parse error: ' + err.message, 'error');
         console.error('WS message parse error:', err);
       }
     };
     ws.onclose = () => {
       setSocketConnected(false);
+      addDevLog('WebSocket connection closed. Retrying connection in 3 seconds...', 'signaling');
       setTimeout(connectWebSocket, 3000);
     };
   };
@@ -191,6 +230,22 @@ export function useOxiDrop() {
   };
 
   const cleanupWebRTC = () => {
+    if (statsIntervalRef.current) {
+      clearInterval(statsIntervalRef.current);
+      statsIntervalRef.current = null;
+    }
+    setWebrtcStats({
+      active: false,
+      connectionState: 'closed',
+      iceConnectionState: 'closed',
+      localCandidateType: '—',
+      remoteCandidateType: '—',
+      connectionType: '—',
+      rtt: null,
+      bytesSent: 0,
+      bytesReceived: 0
+    });
+
     if (dataChannelRef.current) {
       try { dataChannelRef.current.close(); } catch {}
       dataChannelRef.current = null;
@@ -227,28 +282,99 @@ export function useOxiDrop() {
     }
   };
 
+  const startStatsMonitoring = (pc) => {
+    if (statsIntervalRef.current) {
+      clearInterval(statsIntervalRef.current);
+    }
+    setWebrtcStats(prev => ({ ...prev, active: true }));
+
+    statsIntervalRef.current = setInterval(async () => {
+      if (!pc || pc.connectionState === 'closed') {
+        clearInterval(statsIntervalRef.current);
+        return;
+      }
+
+      try {
+        const stats = await pc.getStats();
+        let localCand = null;
+        let remoteCand = null;
+        let activePair = null;
+
+        stats.forEach(report => {
+          if (report.type === 'candidate-pair' && report.state === 'succeeded' && report.nominated) {
+            activePair = report;
+          }
+        });
+
+        if (activePair) {
+          const localId = activePair.localCandidateId;
+          const remoteId = activePair.remoteCandidateId;
+          stats.forEach(report => {
+            if (report.id === localId) localCand = report;
+            if (report.id === remoteId) remoteCand = report;
+          });
+        }
+
+        const rtt = activePair && activePair.currentRoundTripTime !== undefined
+          ? Math.round(activePair.currentRoundTripTime * 1000)
+          : null;
+
+        let connType = '—';
+        if (localCand) {
+          const type = localCand.candidateType;
+          if (type === 'host') connType = 'Local LAN (Host)';
+          else if (type === 'srflx') connType = 'Public P2P (STUN)';
+          else if (type === 'relay') connType = 'Relay (TURN)';
+          else if (type === 'prflx') connType = 'Peer Reflexive';
+        }
+
+        setWebrtcStats({
+          active: true,
+          connectionState: pc.connectionState,
+          iceConnectionState: pc.iceConnectionState,
+          localCandidateType: localCand ? localCand.candidateType : '—',
+          remoteCandidateType: remoteCand ? remoteCand.candidateType : '—',
+          connectionType: connType,
+          rtt,
+          bytesSent: activePair ? activePair.bytesSent : 0,
+          bytesReceived: activePair ? activePair.bytesReceived : 0
+        });
+      } catch (err) {
+        console.warn('Failed to fetch WebRTC connection stats:', err);
+      }
+    }, 1000);
+  };
+
   // ── Sender handlers ──
   const handleApproveRequest = async (request) => {
     try {
+      addDevLog('Approving access request for fileId: ' + request.fileId, 'signaling');
       socketRef.current.send(JSON.stringify({ type: 'approve_request', data: { fileId: request.fileId, receiverId: request.receiverId } }));
       setSenderRequests(prev => prev.filter(r => r.requestId !== request.requestId));
       cleanupWebRTC();
-
+ 
+      addDevLog('Creating RTCPeerConnection for sender...', 'webrtc');
       const pc = new RTCPeerConnection(iceConfiguration);
       peerConnRef.current = pc;
       startConnectionTimeout();
-
+      startStatsMonitoring(pc);
+ 
       // Handle Trickle ICE Candidates
       pc.onicecandidate = (event) => {
-        if (event.candidate && socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-          socketRef.current.send(JSON.stringify({
-            type: 'send_ice_candidate',
-            data: { toUserId: request.receiverId, candidate: event.candidate }
-          }));
+        if (event.candidate) {
+          const candType = event.candidate.candidate ? event.candidate.candidate.split(' ')[7] : 'unknown';
+          addDevLog('Gathered local ICE candidate: type=' + candType, 'ice');
+          if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({
+              type: 'send_ice_candidate',
+              data: { toUserId: request.receiverId, candidate: event.candidate }
+            }));
+          }
         }
       };
-
+ 
       pc.onconnectionstatechange = () => {
+        addDevLog('WebRTC Peer connection state changed: ' + pc.connectionState, 'webrtc');
         if (pc.connectionState === 'connected') {
           clearConnectionTimeout();
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
@@ -258,26 +384,42 @@ export function useOxiDrop() {
           setSenderTransferSpeed(0);
         }
       };
-
+ 
+      addDevLog('Creating WebRTC Data Channel: file-transfer', 'webrtc');
       const dc = pc.createDataChannel('file-transfer', { ordered: true });
       dc.binaryType = 'arraybuffer';
       dataChannelRef.current = dc;
-
-      dc.onopen = () => setIsUploading(true);
-      dc.onmessage = (e) => { try { const h = JSON.parse(e.data); if (h.offset !== undefined) startFileStreaming(dc, h.offset); } catch {} };
+ 
+      dc.onopen = () => {
+        addDevLog('WebRTC Data Channel is open. Waiting for chunk request...', 'webrtc');
+        setIsUploading(true);
+      };
+      dc.onmessage = (e) => { 
+        try { 
+          const h = JSON.parse(e.data); 
+          if (h.offset !== undefined) {
+            addDevLog('Receiver requested file chunks starting from offset: ' + h.offset, 'stream');
+            startFileStreaming(dc, h.offset); 
+          }
+        } catch {} 
+      };
       dc.onclose = () => {
+        addDevLog('WebRTC Data Channel closed.', 'webrtc');
         setIsUploading(false);
         setSenderTransferSpeed(0);
       };
-
+ 
       const offer = await pc.createOffer();
+      addDevLog('Generated local WebRTC SDP Offer.', 'webrtc');
       await pc.setLocalDescription(offer);
-
+ 
+      addDevLog('Sending SDP Offer to receiver via signaling server.', 'signaling');
       socketRef.current.send(JSON.stringify({
         type: 'send_offer',
         data: { toUserId: request.receiverId, offer: pc.localDescription.sdp }
       }));
     } catch (err) {
+      addDevLog('Failed to establish WebRTC connection: ' + err.message, 'error');
       console.error('Error in handleApproveRequest:', err);
       clearConnectionTimeout();
       setIsUploading(false);
@@ -306,6 +448,9 @@ export function useOxiDrop() {
     let currentOffset = offset;
     let bytesSent = 0;
     let lastTime = performance.now();
+    let lastLoggedPct = -1;
+
+    addDevLog(`Starting file stream: ${file.name} (${formatBytes(file.size)})`, 'stream');
 
     const stream = () => {
       while (currentOffset < file.size) {
@@ -318,6 +463,7 @@ export function useOxiDrop() {
           try {
             dc.send(chunk);
           } catch (e) {
+            addDevLog('Failed to send chunk via WebRTC: ' + e.message, 'error');
             console.error('Failed to send chunk via WebRTC:', e);
             cleanupWebRTC();
             setIsUploading(false);
@@ -332,13 +478,21 @@ export function useOxiDrop() {
             bytesSent = 0;
             lastTime = now;
           }
-          setSenderProgress(Math.round((currentOffset / file.size) * 100));
+          const progressPct = Math.round((currentOffset / file.size) * 100);
+          setSenderProgress(progressPct);
+
+          if (progressPct % 10 === 0 && progressPct !== lastLoggedPct) {
+            addDevLog(`Sent chunk: ${formatBytes(currentOffset)} / ${formatBytes(file.size)} (${progressPct}%)`, 'stream');
+            lastLoggedPct = progressPct;
+          }
+
           stream();
         };
         reader.readAsArrayBuffer(slice);
         return;
       }
       setSenderProgress(100);
+      addDevLog('All file chunks pushed to WebRTC data channel buffer.', 'stream');
     };
     stream();
   };
@@ -382,21 +536,28 @@ export function useOxiDrop() {
   const handleReceiveOffer = async (sdpOffer, senderId) => {
     try {
       cleanupWebRTC();
+      addDevLog('Creating RTCPeerConnection for receiver...', 'webrtc');
       const pc = new RTCPeerConnection(iceConfiguration);
       peerConnRef.current = pc;
       startConnectionTimeout();
+      startStatsMonitoring(pc);
 
       // Handle Trickle ICE Candidates
       pc.onicecandidate = (event) => {
-        if (event.candidate && socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-          socketRef.current.send(JSON.stringify({
-            type: 'send_ice_candidate',
-            data: { toUserId: senderId, candidate: event.candidate }
-          }));
+        if (event.candidate) {
+          const candType = event.candidate.candidate ? event.candidate.candidate.split(' ')[7] : 'unknown';
+          addDevLog('Gathered local ICE candidate: type=' + candType, 'ice');
+          if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({
+              type: 'send_ice_candidate',
+              data: { toUserId: senderId, candidate: event.candidate }
+            }));
+          }
         }
       };
 
       pc.onconnectionstatechange = () => {
+        addDevLog('WebRTC Peer connection state changed: ' + pc.connectionState, 'webrtc');
         if (pc.connectionState === 'connected') {
           clearConnectionTimeout();
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
@@ -408,13 +569,20 @@ export function useOxiDrop() {
       };
 
       let buf = [], received = 0, bytesInSec = 0, lastTime = performance.now();
+      let writeQueue = Promise.resolve();
+      let lastLoggedPct = -1;
 
       pc.ondatachannel = (event) => {
         const dc = event.channel;
         dc.binaryType = 'arraybuffer';
         dataChannelRef.current = dc;
+        addDevLog('Received WebRTC Data Channel creation event: ' + dc.label, 'webrtc');
 
-        const onOpen = () => { setIsDownloading(true); dc.send(JSON.stringify({ offset: 0 })); };
+        const onOpen = () => { 
+          setIsDownloading(true); 
+          addDevLog('Data channel open! Sending offset:0 request to sender...', 'webrtc');
+          dc.send(JSON.stringify({ offset: 0 })); 
+        };
         if (dc.readyState === 'open') onOpen(); else dc.onopen = onOpen;
 
         dc.onmessage = async (e) => {
@@ -428,14 +596,24 @@ export function useOxiDrop() {
           }
           const meta = receiverFileMetaRef.current;
           if (!meta) return;
-          setReceiverProgress(Math.round((received / meta.sizeBytes) * 100));
+          const progressPct = Math.round((received / meta.sizeBytes) * 100);
+          setReceiverProgress(progressPct);
+
+          if (progressPct % 10 === 0 && progressPct !== lastLoggedPct) {
+            addDevLog(`Received chunk: ${formatBytes(received)} / ${formatBytes(meta.sizeBytes)} (${progressPct}%)`, 'stream');
+            lastLoggedPct = progressPct;
+          }
 
           if (fileWritableRef.current) {
-            try {
-              await fileWritableRef.current.write(e.data);
-            } catch (err) {
-              console.error('Failed streaming chunk directly to disk path:', err);
-            }
+            const dataToChunk = e.data;
+            writeQueue = writeQueue.then(async () => {
+              try {
+                await fileWritableRef.current.write(dataToChunk);
+              } catch (err) {
+                addDevLog('Failed direct disk write chunk: ' + err.message, 'error');
+                console.error('Failed streaming chunk directly to disk path:', err);
+              }
+            });
           } else {
             buf.push(e.data);
           }
@@ -444,14 +622,22 @@ export function useOxiDrop() {
             setIsDownloading(false);
             setReceiverProgress(100);
             setReceiverTransferSpeed(0);
+            addDevLog('All file bytes received successfully. Saving file...', 'stream');
 
             if (fileWritableRef.current) {
-              try {
-                await fileWritableRef.current.close();
-                fileWritableRef.current = null;
-              } catch (err) {
-                console.error('Failed to close local file descriptor:', err);
-              }
+              writeQueue = writeQueue.then(async () => {
+                try {
+                  await fileWritableRef.current.close();
+                  fileWritableRef.current = null;
+                  addDevLog('Direct disk file writer closed successfully.', 'stream');
+                  socketRef.current.send(JSON.stringify({ type: 'transfer_completed', data: { fileId: meta.fileId, receiverId: userId } }));
+                  addNotification('File downloaded successfully!', 'success');
+                  cleanupWebRTC();
+                } catch (err) {
+                  addDevLog('Error closing local file descriptor: ' + err.message, 'error');
+                  console.error('Failed to close local file descriptor:', err);
+                }
+              });
             } else {
               const url = URL.createObjectURL(new Blob(buf));
               const a = document.createElement('a');
@@ -461,23 +647,31 @@ export function useOxiDrop() {
               a.click();
               document.body.removeChild(a);
               URL.revokeObjectURL(url);
+              addDevLog('Triggered standard browser blob download.', 'stream');
+              socketRef.current.send(JSON.stringify({ type: 'transfer_completed', data: { fileId: meta.fileId, receiverId: userId } }));
+              addNotification('File downloaded successfully!', 'success');
+              cleanupWebRTC();
             }
-
-            socketRef.current.send(JSON.stringify({ type: 'transfer_completed', data: { fileId: meta.fileId, receiverId: userId } }));
           }
         };
         dc.onclose = () => {
+          addDevLog('WebRTC Data Channel closed.', 'webrtc');
           setIsDownloading(false);
           setReceiverTransferSpeed(0);
         };
       };
 
+      addDevLog('Setting remote WebRTC description (Offer)...', 'webrtc');
       await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sdpOffer }));
+      
+      addDevLog('Creating WebRTC SDP Answer...', 'webrtc');
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
+      addDevLog('Sending SDP Answer to peer via signaling server.', 'signaling');
       socketRef.current.send(JSON.stringify({ type: 'send_answer', data: { toUserId: senderId, answer: pc.localDescription.sdp } }));
     } catch (err) {
+      addDevLog('Error setting up receiver WebRTC connection: ' + err.message, 'error');
       console.error('Error in handleReceiveOffer:', err);
       clearConnectionTimeout();
       cleanupWebRTC();
@@ -563,6 +757,9 @@ export function useOxiDrop() {
     receiverProgress,
     receiverTransferSpeed,
     isDownloading,
+    webrtcStats,
+    devLogs,
+    clearDevLogs,
     notifications,
     handleApproveRequest,
     handleFileChange,
