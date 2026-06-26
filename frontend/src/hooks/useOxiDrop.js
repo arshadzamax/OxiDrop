@@ -2,7 +2,16 @@ import { useState, useEffect, useRef } from 'react';
 import { sanitizeFileName } from '../utils/helpers';
 
 export function useOxiDrop() {
-  const [userId] = useState(() => 'web-' + Math.random().toString(36).substr(2, 6));
+  const [userId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = sessionStorage.getItem('oxi_userId');
+      if (stored) return stored;
+      const newId = 'web-' + Math.random().toString(36).substr(2, 6);
+      sessionStorage.setItem('oxi_userId', newId);
+      return newId;
+    }
+    return 'web-' + Math.random().toString(36).substr(2, 6);
+  });
   const [socketConnected, setSocketConnected] = useState(false);
   const [theme, setTheme] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -23,7 +32,12 @@ export function useOxiDrop() {
 
   // Sender state
   const [selectedFile, setSelectedFile] = useState(null);
-  const [registeredFileId, setRegisteredFileId] = useState('');
+  const [registeredFileId, setRegisteredFileId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('oxi_registeredFileId') || '';
+    }
+    return '';
+  });
   const [copied, setCopied] = useState(false);
   const [senderRequests, setSenderRequests] = useState([]);
   const [senderProgress, setSenderProgress] = useState(0);
@@ -52,13 +66,20 @@ export function useOxiDrop() {
 
   useEffect(() => { selectedFileRef.current = selectedFile; }, [selectedFile]);
   useEffect(() => { receiverFileMetaRef.current = receiverFileMeta; }, [receiverFileMeta]);
-  useEffect(() => { registeredFileIdRef.current = registeredFileId; }, [registeredFileId]);
+  useEffect(() => { 
+    registeredFileIdRef.current = registeredFileId; 
+    if (typeof window !== 'undefined') {
+      if (registeredFileId) {
+        sessionStorage.setItem('oxi_registeredFileId', registeredFileId);
+      } else {
+        sessionStorage.removeItem('oxi_registeredFileId');
+      }
+    }
+  }, [registeredFileId]);
 
-  // Host configuration resolution
-  const isTauri = '__TAURI_INTERNALS__' in window;
-  const isLocal = window.location.hostname === 'localhost';
-  const API_HOST = isLocal ? 'http://localhost:5000' : 'https://oxidrop-signaling-server.onrender.com';
-  const WS_HOST = isLocal ? 'ws://localhost:5000' : 'wss://oxidrop-signaling-server.onrender.com';
+  // Host configuration resolution loaded automatically by Vite based on environment modes (.env.development / .env.production)
+  const API_HOST = import.meta.env.VITE_API_HOST || 'http://localhost:5000';
+  const WS_HOST = import.meta.env.VITE_WS_HOST || 'ws://localhost:5000';
 
   // Dynamic ICE server configurations
   const [iceConfiguration, setIceConfiguration] = useState({
@@ -495,6 +516,7 @@ export function useOxiDrop() {
 
   const handleRegisterFile = async () => {
     if (!selectedFile) return;
+    const existingCode = sessionStorage.getItem('oxi_registeredFileId') || undefined;
     setRegisteredFileId('');
     try {
       const res = await fetch(`${API_HOST}/api/files`, {
@@ -504,7 +526,8 @@ export function useOxiDrop() {
           fileName: selectedFile.name,
           sizeBytes: selectedFile.size,
           senderId: userId,
-          autoApprove: false // Enabled manual approval flow
+          autoApprove: false, // Enabled manual approval flow
+          existingFileId: existingCode
         })
       });
       if (!res.ok) throw new Error('Registration failed');
