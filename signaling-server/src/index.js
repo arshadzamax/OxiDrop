@@ -34,6 +34,11 @@ connectDB();
 // Bind HTTP API routes
 app.use('/api', router);
 
+// Root Keep-Alive Health Check Endpoint (for monitors like UptimeRobot)
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'active', service: 'OxiDrop Signaling Server' });
+});
+
 // Bind WebSocket server
 initWebSocketServer(httpServer);
 
