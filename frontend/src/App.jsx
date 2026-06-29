@@ -100,6 +100,17 @@ function App() {
           logs={devLogs}
           onClear={clearDevLogs}
           onClose={() => setShowConsole(false)}
+          socketConnected={socketConnected}
+          activeTab={activeTab}
+          selectedFile={selectedFile}
+          registeredFileId={registeredFileId}
+          senderRequests={senderRequests}
+          receiverFileMeta={receiverFileMeta}
+          requestStatus={requestStatus}
+          webrtcStats={webrtcStats}
+          isUploading={isUploading}
+          isDownloading={isDownloading}
+          fileIdInput={fileIdInput}
         />
       )}
 

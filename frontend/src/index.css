@@ -842,4 +842,66 @@ body {
   background: var(--bg-hover);
 }
 
+/* Dev Console Connection Checklist Styles */
+.dev-console-checklist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: #10141f;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 10px;
+}
+
+.checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: #1a2030;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.checklist-item[data-active="true"] {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.05);
+}
+
+.checklist-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.checklist-item[data-active="true"] .checklist-dot {
+  background: var(--green);
+  box-shadow: 0 0 4px var(--green);
+}
+
+.checklist-item[data-status="failed"] .checklist-dot {
+  background: var(--red);
+  box-shadow: 0 0 4px var(--red);
+}
+
+.checklist-item[data-status="checking"] .checklist-dot {
+  background: var(--orange);
+  box-shadow: 0 0 4px var(--orange);
+}
+
+.checklist-label {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.checklist-status {
+  color: var(--text-3);
+}
+
+.checklist-item[data-active="true"] .checklist-status {
+  color: var(--green);
+}
+
 
