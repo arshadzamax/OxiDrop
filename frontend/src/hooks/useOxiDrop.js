@@ -85,6 +85,7 @@ export function useOxiDrop() {
   const fileWritableRef = useRef(null);
   const isReRegisteringRef = useRef(false);
   const connectionTimeoutRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
 
   useEffect(() => { selectedFileRef.current = selectedFile; }, [selectedFile]);
   useEffect(() => { receiverFileMetaRef.current = receiverFileMeta; }, [receiverFileMeta]);
@@ -140,12 +141,48 @@ export function useOxiDrop() {
     connectWebSocket();
     return () => {
       if (socketRef.current) socketRef.current.close();
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       cleanupWebRTC();
       clearConnectionTimeout();
     };
   }, []);
 
+  // Listen to visibility and focus events to reconnect instantly on mobile
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        if (!socketRef.current || socketRef.current.readyState === WebSocket.CLOSED || socketRef.current.readyState === WebSocket.CLOSING) {
+          addDevLog('Page became active. Reconnecting WebSocket immediately...', 'signaling');
+          connectWebSocket();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
+  }, []);
+
   const connectWebSocket = () => {
+    // Clear any pending automatic reconnect timeout
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    // Skip if already open or connecting to avoid double connections
+    if (socketRef.current) {
+      const state = socketRef.current.readyState;
+      if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) {
+        addDevLog('WebSocket is already open or connecting. Skipping initialization.', 'signaling');
+        return;
+      }
+    }
+
     addDevLog('Initializing WebSocket connection to: ' + WS_HOST, 'signaling');
     const ws = new WebSocket(WS_HOST);
     socketRef.current = ws;
@@ -200,7 +237,8 @@ export function useOxiDrop() {
     ws.onclose = () => {
       setSocketConnected(false);
       addDevLog('WebSocket connection closed. Retrying connection in 3 seconds...', 'signaling');
-      setTimeout(connectWebSocket, 3000);
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = setTimeout(connectWebSocket, 3000);
     };
   };
 
