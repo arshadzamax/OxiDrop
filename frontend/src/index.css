@@ -904,4 +904,123 @@ body {
   color: var(--green);
 }
 
+/* ==========================================================================
+   MOBILE & RESPONSIVE LAYOUT (Mobile-First Optimization)
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  /* 1. App Shell and Scroll behavior */
+  .app {
+    height: 100dvh; /* Use dynamic viewport height to prevent address-bar bugs on iOS/Android */
+    grid-template-rows: 48px 1fr auto;
+  }
+
+  .main {
+    overflow-y: hidden;
+  }
+
+  .content {
+    grid-template-columns: 1fr;
+    overflow-y: auto; /* Let the content grid scroll as a single column */
+    height: 100%;
+  }
+
+  /* 2. Panels and spacing */
+  .panel {
+    padding: 16px;
+    overflow-y: visible; /* Prevent nested scrolls inside columns */
+    height: auto;
+  }
+
+  .panel-main {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* 3. Mobile Tabs */
+  .tabs {
+    padding: 0;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .tab {
+    flex: 1;
+    justify-content: center;
+    padding: 12px 0;
+    font-size: 14px;
+    background: var(--bg);
+  }
+
+  /* 4. Dropzone spacing */
+  .dropzone {
+    padding: 32px 16px;
+  }
+
+  /* 5. Developer Console Checklist Swipeable Row */
+  .dev-console-checklist {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 6px 10px;
+    -webkit-overflow-scrolling: touch;
+    gap: 6px;
+  }
+
+  .checklist-item {
+    flex-shrink: 0;
+  }
+
+  /* 6. Diagnostics stats panel layout */
+  .telemetry-stats {
+    gap: 12px;
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .telemetry-stat {
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 500px) {
+  /* 7. Header Compact Optimization */
+  .header {
+    padding: 0 12px;
+  }
+
+  /* Hide the text in status chip, turning it into a neat status circle */
+  .status-chip {
+    font-size: 0 !important;
+    padding: 4px;
+    width: 20px;
+    height: 20px;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    justify-content: center;
+    border-color: var(--border);
+  }
+
+  .status-chip .status-dot {
+    margin: 0;
+  }
+
+  /* Hide Node ID from header on small screens to save valuable space */
+  .node-id {
+    display: none;
+  }
+
+  /* Adjust telemetry top metadata */
+  .telemetry-top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .telemetry-pct {
+    align-self: flex-end;
+    margin-top: -18px;
+  }
+}
+
 
