@@ -71,7 +71,25 @@ router.get('/webrtc/ice-servers', asyncHandler(async (req, res) => {
     { urls: 'stun:stun2.l.google.com:19302' }
   ];
 
-  if (process.env.TURN_URL) {
+  // If a Metered.ca API Key is present, dynamically fetch active TURN credentials
+  if (process.env.METERED_API_KEY) {
+    try {
+      const response = await fetch(
+        `https://oxidrop.metered.live/api/v1/turn/credentials?apiKey=${process.env.METERED_API_KEY}`
+      );
+      if (response.ok) {
+        const meteredServers = await response.json();
+        if (Array.isArray(meteredServers)) {
+          iceServers.push(...meteredServers);
+        }
+      } else {
+        console.error('Metered.ca API returned error status:', response.status);
+      }
+    } catch (err) {
+      console.error('Failed to fetch dynamic TURN credentials from Metered.ca:', err.message);
+    }
+  } else if (process.env.TURN_URL) {
+    // Fallback to manual static TURN configuration if configured
     iceServers.push({
       urls: process.env.TURN_URL,
       username: process.env.TURN_USERNAME || '',
