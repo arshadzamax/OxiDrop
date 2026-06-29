@@ -132,16 +132,18 @@ router.post('/files', stageLimiter, asyncHandler(async (req, res) => {
     fileId = fileId.trim().toLowerCase();
   }
 
-  // Allow safe overwrite/upsert of existing file ID from the same sender session
-  await File.deleteOne({ fileId });
-
-  const newFile = await File.create({
-    fileId,
-    senderId: senderId.trim(),
-    fileName: fileName.trim(),
-    sizeBytes,
-    autoApprove: !!autoApprove
-  });
+  // Allow safe atomic upsert of existing file ID from the same sender session
+  const newFile = await File.findOneAndUpdate(
+    { fileId },
+    {
+      senderId: senderId.trim(),
+      fileName: fileName.trim(),
+      sizeBytes,
+      autoApprove: !!autoApprove,
+      createdAt: new Date() // Reset TTL timer to prevent premature expiration
+    },
+    { upsert: true, new: true }
+  );
 
   res.status(201).json({
     status: 'success',
