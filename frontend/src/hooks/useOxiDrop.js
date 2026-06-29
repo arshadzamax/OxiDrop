@@ -119,8 +119,25 @@ export function useOxiDrop() {
         if (res.ok) {
           const config = await res.json();
           setIceConfiguration({ iceServers: config.iceServers });
+
+          // Verify if TURN servers were loaded successfully
+          const servers = config.iceServers || [];
+          const hasTurn = servers.some(s => {
+            const urls = s.urls;
+            if (Array.isArray(urls)) {
+              return urls.some(u => u.startsWith('turn:') || u.startsWith('turns:'));
+            }
+            return typeof urls === 'string' && (urls.startsWith('turn:') || urls.startsWith('turns:'));
+          });
+
+          if (hasTurn) {
+            addDevLog('ICE configurations loaded successfully (STUN + TURN active). Ready for mobile data transfers.', 'ice');
+          } else {
+            addDevLog('WARNING: WebRTC loaded STUN-only routes (TURN inactive). Cross-network/mobile connections will fail.', 'error');
+          }
         }
       } catch (err) {
+        addDevLog('Failed to fetch dynamic ICE configurations: ' + err.message, 'error');
         console.warn('Failed to load dynamic WebRTC ICE configurations, using local fallback.', err);
       }
     };

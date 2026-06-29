@@ -43,6 +43,11 @@ app.use(errorHandler);
 // Boot HTTP Server
 httpServer.listen(PORT, () => {
   logger.info(`OxiDrop Signaling Server running in production-ready mode on port ${PORT}`);
+  if (process.env.METERED_API_KEY) {
+    logger.info('[Config] METERED_API_KEY is configured. Dynamic TURN server credentials active.');
+  } else {
+    logger.warn('[Config] METERED_API_KEY is missing! TURN server relay fallback will be inactive. Mobile-to-PC connections may fail.');
+  }
 });
 
 // --- Graceful Shutdown Management ---

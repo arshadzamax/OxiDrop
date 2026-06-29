@@ -93,7 +93,7 @@ export const initWebSocketServer = (httpServer) => {
 
             authenticatedUserId = cleanUserId;
             clients.set(cleanUserId, ws);
-            logger.info(`User online registration: ${cleanUserId}`);
+            logger.info(`[Socket Registry] User online: ${cleanUserId}`);
 
             await User.findOneAndUpdate(
               { userId: cleanUserId },
@@ -103,13 +103,17 @@ export const initWebSocketServer = (httpServer) => {
 
             // Fetch and push pending requests automatically on login
             const userFiles = await File.find({ senderId: cleanUserId });
+            logger.info(`[Socket Registry] Found ${userFiles.length} registered files in database for sender: ${cleanUserId}`);
+            
             const fileIds = userFiles.map(f => f.fileId);
             const pendingRequests = await Request.find({ fileId: { $in: fileIds }, status: 'PENDING' });
+            logger.info(`[Socket Registry] Found ${pendingRequests.length} pending requests for files: [${fileIds.join(', ')}]`);
 
             for (const request of pendingRequests) {
               const file = userFiles.find(f => f.fileId === request.fileId);
+              logger.info(`[Socket Registry] Dispatching pending request ${request._id.toString()} (receiver: ${request.receiverId}) to sender: ${cleanUserId}`);
               sendJson(ws, 'new_access_request', {
-                requestId: request._id,
+                requestId: request._id.toString(),
                 fileId: request.fileId,
                 fileName: file ? file.fileName : 'Unknown File',
                 sizeBytes: file ? file.sizeBytes : 0,
