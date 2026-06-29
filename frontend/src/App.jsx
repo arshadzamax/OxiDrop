@@ -47,7 +47,7 @@ function App() {
   } = useOxiDrop();
 
   return (
-    <div className="app">
+    <div className={`app ${showConsole ? 'console-open' : ''}`}>
       <Header 
         socketConnected={socketConnected} 
         userId={userId} 

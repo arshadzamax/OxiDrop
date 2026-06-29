@@ -57,6 +57,10 @@ body {
   overflow: hidden;
 }
 
+.app.console-open {
+  grid-template-rows: 48px 1fr 200px auto;
+}
+
 /* ═══ HEADER ═══ */
 
 .header {
@@ -915,8 +919,25 @@ body {
     grid-template-rows: 48px 1fr auto;
   }
 
+  .app.console-open {
+    grid-template-rows: 48px 1fr auto; /* Keep 3-row layout on mobile; console is fixed overlay */
+  }
+
   .main {
     overflow-y: hidden;
+  }
+
+  /* Console floating drawer overlay on mobile screens */
+  .dev-console {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 50dvh; /* Cover bottom half of viewport to avoid squishing main forms */
+    z-index: 2000;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.6);
+    border-bottom: none;
+    background: #0c0f16;
   }
 
   .content {
