@@ -11,9 +11,11 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "framer-motion": "^12.42.0",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "three": "^0.185.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",

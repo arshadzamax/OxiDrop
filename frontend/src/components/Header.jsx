@@ -1,10 +1,10 @@
 import React from 'react';
 import { Sun, Moon, Terminal } from 'lucide-react';
 
-export function Header({ socketConnected, userId, theme, toggleTheme, showConsole, setShowConsole }) {
+export function Header({ socketConnected, userId, theme, toggleTheme, showConsole, setShowConsole, onGoHome }) {
   return (
     <header className="header">
-      <div className="header-left">
+      <div className="header-left" onClick={onGoHome} style={{ cursor: 'pointer' }}>
         <span className="header-logo">OxiDrop</span>
       </div>
 
