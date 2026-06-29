@@ -1,60 +1,66 @@
 import React, { useState } from 'react';
-import { ArrowUpFromLine, ArrowDownToLine } from 'lucide-react';
 import './App.css';
 
 import { Header } from './components/Header';
-import { ShareTab } from './components/ShareTab';
-import { ReceiveTab } from './components/ReceiveTab';
+import { LandingPage } from './components/LandingPage';
+import { ConnectionPanel } from './components/ConnectionPanel';
+import { FileTransferPanel } from './components/FileTransferPanel';
 import { TelemetryPanel } from './components/TelemetryPanel';
 import { DeveloperConsole } from './components/DeveloperConsole';
 import { useOxiDrop } from './hooks/useOxiDrop';
-import { formatBytes } from './utils/helpers';
 
 function App() {
-  const [activeTab, setActiveTab] = useState('share');
+  const [view, setView] = useState('landing'); // 'landing' | 'app'
   const [showConsole, setShowConsole] = useState(false);
-  
+
   const {
     userId,
     socketConnected,
     theme,
     toggleTheme,
+    roomCode,
+    isHost,
+    peerConnected,
+    peerId,
     selectedFile,
-    registeredFileId,
-    copied,
-    senderRequests,
     senderProgress,
     senderTransferSpeed,
     isUploading,
-    fileIdInput,
-    setFileIdInput,
     receiverFileMeta,
-    isFetchingMeta,
-    requestStatus,
     receiverProgress,
     receiverTransferSpeed,
     isDownloading,
+    incomingFileOffer,
+    fileOfferPending,
     webrtcStats,
     devLogs,
     clearDevLogs,
-    handleApproveRequest,
+    notifications,
+    createRoom,
+    joinRoom,
+    leaveRoom,
     handleFileChange,
-    handleRegisterFile,
-    copyToClipboard,
-    handleFetchMetadata,
-    handleRequestAccess,
-    notifications
+    sendFile,
+    acceptIncomingFile,
+    rejectIncomingFile,
+    chatMessages,
+    sendChatMessage
   } = useOxiDrop();
+
+  if (view === 'landing') {
+    return <LandingPage onLaunch={() => setView('app')} />;
+  }
 
   return (
     <div className={`app ${showConsole ? 'console-open' : ''}`}>
-      <Header 
-        socketConnected={socketConnected} 
-        userId={userId} 
-        theme={theme} 
-        toggleTheme={toggleTheme} 
-        showConsole={showConsole} 
-        setShowConsole={setShowConsole} 
+      <Header
+        socketConnected={socketConnected}
+        userId={userId}
+        theme={theme}
+        toggleTheme={toggleTheme}
+        showConsole={showConsole}
+        setShowConsole={setShowConsole}
+        onGoHome={() => setView('landing')}
       />
 
       {/* Floating non-blocking custom SnackBar/Toast alerts */}
@@ -67,60 +73,66 @@ function App() {
       </div>
 
       <main className="main">
-        <div className="tabs">
-          <button className={`tab ${activeTab === 'share' ? 'active' : ''}`} onClick={() => setActiveTab('share')}>
-            <ArrowUpFromLine size={14} /> Send
-          </button>
-          <button className={`tab ${activeTab === 'receive' ? 'active' : ''}`} onClick={() => setActiveTab('receive')}>
-            <ArrowDownToLine size={14} /> Receive
-          </button>
-        </div>
-
         <div className="content">
-          {activeTab === 'share' ? (
-            <ShareTab
-              selectedFile={selectedFile} handleFileChange={handleFileChange}
-              registeredFileId={registeredFileId} isRegistering={false}
-              handleRegisterFile={handleRegisterFile} copied={copied}
-              copyToClipboard={copyToClipboard} senderRequests={senderRequests}
-              handleApproveRequest={handleApproveRequest} formatBytes={formatBytes}
+          <div className="content-inner">
+            <ConnectionPanel
+              socketConnected={socketConnected}
+              roomCode={roomCode}
+              isHost={isHost}
+              peerConnected={peerConnected}
+              peerId={peerId}
+              onCreateRoom={createRoom}
+              onJoinRoom={joinRoom}
+              onLeaveRoom={leaveRoom}
             />
-          ) : (
-            <ReceiveTab
-              fileIdInput={fileIdInput} setFileIdInput={setFileIdInput}
-              receiverFileMeta={receiverFileMeta} isFetchingMeta={isFetchingMeta}
-              handleFetchMetadata={handleFetchMetadata} requestStatus={requestStatus}
-              handleRequestAccess={handleRequestAccess} formatBytes={formatBytes}
-            />
-          )}
+
+            {peerConnected && (
+              <FileTransferPanel
+                selectedFile={selectedFile}
+                onFileChange={handleFileChange}
+                onSendFile={sendFile}
+                senderProgress={senderProgress}
+                senderTransferSpeed={senderTransferSpeed}
+                isUploading={isUploading}
+                receiverFileMeta={receiverFileMeta}
+                receiverProgress={receiverProgress}
+                receiverTransferSpeed={receiverTransferSpeed}
+                isDownloading={isDownloading}
+                fileOfferPending={fileOfferPending}
+                incomingFileOffer={incomingFileOffer}
+                onAcceptFile={acceptIncomingFile}
+                onRejectFile={rejectIncomingFile}
+                chatMessages={chatMessages}
+                onSendChatMessage={sendChatMessage}
+              />
+            )}
+          </div>
         </div>
       </main>
+
       {showConsole && (
         <DeveloperConsole
           logs={devLogs}
           onClear={clearDevLogs}
           onClose={() => setShowConsole(false)}
           socketConnected={socketConnected}
-          activeTab={activeTab}
-          selectedFile={selectedFile}
-          registeredFileId={registeredFileId}
-          senderRequests={senderRequests}
-          receiverFileMeta={receiverFileMeta}
-          requestStatus={requestStatus}
+          roomCode={roomCode}
+          isHost={isHost}
+          peerId={peerId}
+          peerConnected={peerConnected}
           webrtcStats={webrtcStats}
           isUploading={isUploading}
           isDownloading={isDownloading}
-          fileIdInput={fileIdInput}
         />
       )}
 
       <TelemetryPanel
-        isTransferring={activeTab === 'share' ? isUploading : isDownloading}
-        transferMode={activeTab === 'share' ? 'upload' : 'download'}
-        fileName={activeTab === 'share' ? selectedFile?.name : receiverFileMeta?.fileName}
-        progress={activeTab === 'share' ? senderProgress : receiverProgress}
-        speed={activeTab === 'share' ? senderTransferSpeed : receiverTransferSpeed}
-        totalSize={activeTab === 'share' ? selectedFile?.size : receiverFileMeta?.sizeBytes}
+        isTransferring={isUploading || isDownloading}
+        transferMode={isUploading ? 'upload' : 'download'}
+        fileName={isUploading ? selectedFile?.name : receiverFileMeta?.fileName}
+        progress={isUploading ? senderProgress : receiverProgress}
+        speed={isUploading ? senderTransferSpeed : receiverTransferSpeed}
+        totalSize={isUploading ? selectedFile?.size : receiverFileMeta?.sizeBytes}
         webrtcStats={webrtcStats}
       />
     </div>

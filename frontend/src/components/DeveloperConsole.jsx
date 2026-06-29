@@ -1,21 +1,18 @@
 import React, { useEffect, useRef } from 'react';
 import { Terminal, Trash2, X } from 'lucide-react';
 
-export function DeveloperConsole({ 
-  logs, 
-  onClear, 
+export function DeveloperConsole({
+  logs,
+  onClear,
   onClose,
   socketConnected,
-  activeTab,
-  selectedFile,
-  registeredFileId,
-  senderRequests = [],
-  receiverFileMeta,
-  requestStatus,
+  roomCode,
+  isHost,
+  peerId,
+  peerConnected,
   webrtcStats,
   isUploading,
-  isDownloading,
-  fileIdInput
+  isDownloading
 }) {
   const scrollRef = useRef(null);
 
@@ -37,69 +34,37 @@ export function DeveloperConsole({
     }
   };
 
-  const steps = activeTab === 'share' ? [
+  const steps = [
     {
       label: 'Signaling WS',
       active: socketConnected,
       status: socketConnected ? 'connected' : 'disconnected'
     },
     {
-      label: 'File Selected',
-      active: !!selectedFile,
-      status: selectedFile ? (selectedFile.name.length > 12 ? selectedFile.name.substring(0, 10) + '...' : selectedFile.name) : 'missing'
+      label: 'Room',
+      active: !!roomCode,
+      status: roomCode ? `${isHost ? 'hosting' : 'joined'}: ${roomCode}` : 'none'
     },
     {
-      label: 'Share Link',
-      active: !!registeredFileId,
-      status: registeredFileId ? 'active' : 'pending'
+      label: 'Peer',
+      active: !!peerId,
+      status: peerId ? peerId : 'waiting'
     },
     {
-      label: 'Access Request',
-      active: senderRequests.length > 0 || (webrtcStats && webrtcStats.connectionState !== 'closed' && webrtcStats.connectionState !== 'new'),
-      status: senderRequests.length > 0 ? 'pending approval' : (webrtcStats && webrtcStats.connectionState !== 'closed' && webrtcStats.connectionState !== 'new' ? 'approved' : 'waiting')
-    },
-    {
-      label: 'WebRTC State',
+      label: 'WebRTC',
       active: webrtcStats && webrtcStats.connectionState === 'connected',
       status: webrtcStats ? webrtcStats.connectionState : 'closed',
       customDot: webrtcStats && webrtcStats.connectionState === 'failed' ? 'failed' : (webrtcStats && (webrtcStats.connectionState === 'connecting' || webrtcStats.connectionState === 'checking') ? 'checking' : null)
     },
     {
       label: 'Data Channel',
-      active: isUploading,
-      status: isUploading ? 'streaming' : 'idle'
-    }
-  ] : [
-    {
-      label: 'Signaling WS',
-      active: socketConnected,
-      status: socketConnected ? 'connected' : 'disconnected'
+      active: peerConnected,
+      status: peerConnected ? 'open' : 'closed'
     },
     {
-      label: 'Code Entered',
-      active: !!fileIdInput,
-      status: fileIdInput ? 'entered' : 'empty'
-    },
-    {
-      label: 'Metadata Lookup',
-      active: !!receiverFileMeta,
-      status: receiverFileMeta ? 'found' : 'searching'
-    },
-    {
-      label: 'Request Access',
-      active: requestStatus === 'APPROVED' || (webrtcStats && webrtcStats.connectionState !== 'closed' && webrtcStats.connectionState !== 'new'),
-      status: requestStatus || 'idle'
-    },
-    {
-      label: 'WebRTC State',
-      active: webrtcStats && webrtcStats.connectionState === 'connected',
-      status: webrtcStats ? webrtcStats.connectionState : 'closed',
-      customDot: webrtcStats && webrtcStats.connectionState === 'failed' ? 'failed' : (webrtcStats && (webrtcStats.connectionState === 'connecting' || webrtcStats.connectionState === 'checking') ? 'checking' : null)
-    },
-    {
-      label: 'Data Channel',
-      active: isDownloading,
-      status: isDownloading ? 'streaming' : 'idle'
+      label: 'Transfer',
+      active: isUploading || isDownloading,
+      status: isUploading ? 'sending' : (isDownloading ? 'receiving' : 'idle')
     }
   ];
 
@@ -122,10 +87,10 @@ export function DeveloperConsole({
 
       <div className="dev-console-checklist">
         {steps.map((step, idx) => (
-          <div 
-            key={idx} 
-            className="checklist-item" 
-            data-active={step.active} 
+          <div
+            key={idx}
+            className="checklist-item"
+            data-active={step.active}
             data-status={step.customDot || (step.active ? 'active' : 'idle')}
           >
             <div className="checklist-dot" />
