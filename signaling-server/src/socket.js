@@ -106,8 +106,16 @@ export const initWebSocketServer = (httpServer) => {
             const fileIds = userFiles.map(f => f.fileId);
             const pendingRequests = await Request.find({ fileId: { $in: fileIds }, status: 'PENDING' });
 
-            if (pendingRequests.length > 0) {
-              sendJson(ws, 'pending_requests_alert', pendingRequests);
+            for (const request of pendingRequests) {
+              const file = userFiles.find(f => f.fileId === request.fileId);
+              sendJson(ws, 'new_access_request', {
+                requestId: request._id,
+                fileId: request.fileId,
+                fileName: file ? file.fileName : 'Unknown File',
+                sizeBytes: file ? file.sizeBytes : 0,
+                receiverId: request.receiverId,
+                autoApproved: file ? file.autoApprove : false
+              });
             }
             break;
           }
