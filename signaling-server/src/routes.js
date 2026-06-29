@@ -2,9 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import mongoose from 'mongoose';
-import { File } from './models/File.js';
-import { Request } from './models/Request.js';
-import { User } from './models/User.js';
+import { Room } from './models/Room.js';
 import { asyncHandler, AppError } from './middleware/errorHandler.js';
 
 export const router = express.Router();
@@ -24,16 +22,16 @@ const generalLimiter = rateLimit({
   }
 });
 
-// Stricter limiter for staging/registering files to avoid database flood
-const stageLimiter = rateLimit({
+// Stricter limiter for room creation to prevent database flood
+const roomCreateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 50, // Limit each IP to 50 staged files per 15 minutes
+  max: 50, // Limit each IP to 50 room creations per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
   message: {
     status: 'error',
     statusCode: 429,
-    message: 'Too many file stagings from this node, please try again later.'
+    message: 'Too many room creations from this node, please try again later.'
   }
 });
 
@@ -63,7 +61,7 @@ router.get('/health', asyncHandler(async (req, res) => {
   res.json(health);
 }));
 
-// Fetch WebRTC ICE Servers configuration (STUN/TURN)
+// 2. Fetch WebRTC ICE Servers configuration (STUN/TURN)
 router.get('/webrtc/ice-servers', asyncHandler(async (req, res) => {
   const iceServers = [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -100,109 +98,47 @@ router.get('/webrtc/ice-servers', asyncHandler(async (req, res) => {
   res.json({ iceServers });
 }));
 
-// 2. Register a File (Phase 1: Registration)
-router.post('/files', stageLimiter, asyncHandler(async (req, res) => {
-  const { fileName, sizeBytes, autoApprove, senderId, existingFileId } = req.body;
+// 3. Create a Room (Connection-First: pair devices before file selection)
+router.post('/rooms', roomCreateLimiter, asyncHandler(async (req, res) => {
+  const { hostId } = req.body;
 
-  // STRICT INPUT VALIDATION
-  if (!fileName || typeof fileName !== 'string' || fileName.trim() === '') {
-    throw new AppError('File name is required and must be a valid string', 400);
+  if (!hostId || typeof hostId !== 'string' || hostId.trim() === '') {
+    throw new AppError('Host ID is required and must be a valid string', 400);
   }
-  if (fileName.length > 255) {
-    throw new AppError('File name exceeds the maximum length of 255 characters', 400);
-  }
-  if (sizeBytes === undefined || typeof sizeBytes !== 'number' || sizeBytes <= 0) {
-    throw new AppError('File size is required and must be a positive number', 400);
-  }
-  // Prevent excessive size registration anomalies (e.g. PB range overflow limits)
-  if (sizeBytes > 10 * 1024 * 1024 * 1024 * 1024) { // 10 Terabytes safety limit
-    throw new AppError('File size exceeds safety registration limit (10TB)', 400);
-  }
-  if (!senderId || typeof senderId !== 'string' || senderId.trim() === '') {
-    throw new AppError('Sender ID is required and must be a valid string', 400);
-  }
-  if (senderId.length > 64) {
-    throw new AppError('Sender ID exceeds safety limit of 64 characters', 400);
+  if (hostId.length > 64) {
+    throw new AppError('Host ID exceeds safety limit of 64 characters', 400);
   }
 
-  let fileId = req.body.fileId;
-  if (!fileId || typeof fileId !== 'string' || fileId.length !== 12) {
-    fileId = crypto.randomBytes(6).toString('hex');
-  } else {
-    fileId = fileId.trim().toLowerCase();
-  }
+  // Generate a unique 6-char hex room code
+  const roomCode = crypto.randomBytes(3).toString('hex');
 
-  // Allow safe atomic upsert of existing file ID from the same sender session
-  const newFile = await File.findOneAndUpdate(
-    { fileId },
-    {
-      senderId: senderId.trim(),
-      fileName: fileName.trim(),
-      sizeBytes,
-      autoApprove: !!autoApprove,
-      createdAt: new Date() // Reset TTL timer to prevent premature expiration
-    },
-    { upsert: true, new: true }
-  );
+  const room = await Room.create({
+    roomCode,
+    hostId: hostId.trim()
+  });
 
   res.status(201).json({
     status: 'success',
-    message: 'File registered successfully',
-    fileId: newFile.fileId,
-    shareLink: `/share/${newFile.fileId}`
+    roomCode: room.roomCode
   });
 }));
 
-// 3. Fetch File Metadata (Phase 2: Metadata Check)
-router.get('/files/:fileId', asyncHandler(async (req, res) => {
-  const { fileId } = req.params;
+// 4. Get Room Status
+router.get('/rooms/:code', asyncHandler(async (req, res) => {
+  const { code } = req.params;
 
-  if (!fileId || typeof fileId !== 'string' || fileId.length !== 12) {
-    throw new AppError('Invalid File Tunnel ID format', 400);
+  if (!code || typeof code !== 'string' || code.length !== 6) {
+    throw new AppError('Invalid room code format (must be 6 hex characters)', 400);
   }
 
-  const file = await File.findOne({ fileId: fileId.toLowerCase() });
-  if (!file) {
-    throw new AppError('File not found or tunnel closed', 404);
+  const room = await Room.findOne({ roomCode: code.toLowerCase() });
+  if (!room) {
+    throw new AppError('Room not found or expired', 404);
   }
 
   res.json({
-    fileId: file.fileId,
-    fileName: file.fileName,
-    sizeBytes: file.sizeBytes,
-    senderId: file.senderId,
-    autoApprove: file.autoApprove
+    roomCode: room.roomCode,
+    hostId: room.hostId,
+    status: room.guestId ? 'paired' : 'waiting'
   });
-}));
-
-// 4. Fetch Pending requests for a Sender
-router.get('/requests/pending/:userId', asyncHandler(async (req, res) => {
-  const { userId } = req.params;
-
-  if (!userId || typeof userId !== 'string' || userId.length > 64) {
-    throw new AppError('Invalid user ID', 400);
-  }
-
-  const userFiles = await File.find({ senderId: userId });
-  const fileIds = userFiles.map(f => f.fileId);
-
-  const pendingRequests = await Request.find({
-    fileId: { $in: fileIds },
-    status: 'PENDING'
-  });
-
-  const enrichedRequests = pendingRequests.map(reqItem => {
-    const fileMeta = userFiles.find(f => f.fileId === reqItem.fileId);
-    return {
-      requestId: reqItem._id,
-      fileId: reqItem.fileId,
-      fileName: fileMeta ? fileMeta.fileName : 'Unknown File',
-      sizeBytes: fileMeta ? fileMeta.sizeBytes : 0,
-      receiverId: reqItem.receiverId,
-      status: reqItem.status,
-      createdAt: reqItem.createdAt
-    };
-  });
-
-  res.json(enrichedRequests);
 }));

@@ -42,7 +42,8 @@ app.use(errorHandler);
 
 // Boot HTTP Server
 httpServer.listen(PORT, () => {
-  logger.info(`OxiDrop Signaling Server running in production-ready mode on port ${PORT}`);
+  logger.info(`OxiDrop Signaling Server (Room-Based Architecture) running on port ${PORT}`);
+  logger.info('[Config] Architecture: Connection-First Room Pairing (devices pair first, files transfer over P2P data channel)');
   if (process.env.METERED_API_KEY) {
     logger.info('[Config] METERED_API_KEY is configured. Dynamic TURN server credentials active.');
   } else {

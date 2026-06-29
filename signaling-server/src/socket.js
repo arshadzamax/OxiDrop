@@ -1,7 +1,6 @@
 import { WebSocketServer } from 'ws';
 import { User } from './models/User.js';
-import { File } from './models/File.js';
-import { Request } from './models/Request.js';
+import { Room } from './models/Room.js';
 import { logger } from './utils/logger.js';
 import { MAX_MESSAGE_SIZE, PING_INTERVAL } from './config.js';
 
@@ -101,107 +100,86 @@ export const initWebSocketServer = (httpServer) => {
               { upsert: true, new: true }
             );
 
-            // Fetch and push pending requests automatically on login
-            const userFiles = await File.find({ senderId: cleanUserId });
-            logger.info(`[Socket Registry] Found ${userFiles.length} registered files in database for sender: ${cleanUserId}`);
-            
-            const fileIds = userFiles.map(f => f.fileId);
-            const pendingRequests = await Request.find({ fileId: { $in: fileIds }, status: 'PENDING' });
-            logger.info(`[Socket Registry] Found ${pendingRequests.length} pending requests for files: [${fileIds.join(', ')}]`);
+            sendJson(ws, 'registered', { userId: cleanUserId });
+            break;
+          }
 
-            for (const request of pendingRequests) {
-              const file = userFiles.find(f => f.fileId === request.fileId);
-              logger.info(`[Socket Registry] Dispatching pending request ${request._id.toString()} (receiver: ${request.receiverId}) to sender: ${cleanUserId}`);
-              sendJson(ws, 'new_access_request', {
-                requestId: request._id.toString(),
-                fileId: request.fileId,
-                fileName: file ? file.fileName : 'Unknown File',
-                sizeBytes: file ? file.sizeBytes : 0,
-                receiverId: request.receiverId,
-                autoApproved: file ? file.autoApprove : false
+          // B. Host creates a new room for pairing
+          case 'create_room': {
+            const { userId } = data || {};
+            if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+              sendJson(ws, 'error_message', { message: 'Valid userId is required to create a room' });
+              return;
+            }
+
+            const cleanUserId = userId.trim();
+            const crypto = await import('crypto');
+            const roomCode = crypto.randomBytes(3).toString('hex');
+
+            try {
+              await Room.create({
+                roomCode,
+                hostId: cleanUserId
               });
+
+              logger.info(`[Room] Created room ${roomCode} by host ${cleanUserId}`);
+              sendJson(ws, 'room_created', { roomCode });
+            } catch (err) {
+              logger.error(`[Room] Failed to create room: ${err.message}`, err);
+              sendJson(ws, 'error_message', { message: 'Failed to create room, please try again' });
             }
             break;
           }
 
-          // B. Receiver requests file access
-          case 'request_access': {
-            const { fileId, receiverId } = data || {};
-            if (!fileId || typeof fileId !== 'string' || !receiverId || typeof receiverId !== 'string') {
-              logger.warn('Received invalid request_access payload parameters.');
+          // C. Guest joins an existing room by code
+          case 'join_room': {
+            const { roomCode, userId } = data || {};
+            if (!roomCode || typeof roomCode !== 'string' || roomCode.trim().length !== 6) {
+              sendJson(ws, 'error_message', { message: 'Invalid room code format (must be 6 hex characters)' });
+              return;
+            }
+            if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+              sendJson(ws, 'error_message', { message: 'Valid userId is required to join a room' });
               return;
             }
 
-            const cleanFileId = fileId.trim().toLowerCase();
-            const cleanReceiverId = receiverId.trim();
+            const cleanRoomCode = roomCode.trim().toLowerCase();
+            const cleanUserId = userId.trim();
 
-            const file = await File.findOne({ fileId: cleanFileId });
-            if (!file) {
-              sendJson(ws, 'error_message', { message: 'File not found or tunnel closed' });
+            // First check if the room exists
+            const existingRoom = await Room.findOne({ roomCode: cleanRoomCode });
+            if (!existingRoom) {
+              sendJson(ws, 'error_message', { message: 'Room not found or expired' });
               return;
             }
 
-            const initialStatus = file.autoApprove ? 'APPROVED' : 'PENDING';
-            const request = await Request.findOneAndUpdate(
-              { fileId: cleanFileId, receiverId: cleanReceiverId },
-              { status: initialStatus, createdAt: new Date() },
-              { upsert: true, new: true }
+            if (existingRoom.hostId === cleanUserId) {
+              sendJson(ws, 'error_message', { message: 'Cannot join your own room' });
+              return;
+            }
+
+            // Atomically pair the guest into the room only if guestId is currently null
+            const room = await Room.findOneAndUpdate(
+              { roomCode: cleanRoomCode, guestId: null },
+              { guestId: cleanUserId },
+              { new: true }
             );
 
-            logger.info(`Access request for file ${cleanFileId} by receiver ${cleanReceiverId}. Status: ${initialStatus}`);
-
-            // Send confirmation back to receiver
-            sendJson(ws, 'request_status_update', { fileId: cleanFileId, status: initialStatus, senderId: file.senderId });
-
-            // Notify sender if online
-            const senderWs = clients.get(file.senderId);
-            if (senderWs) {
-              sendJson(senderWs, 'new_access_request', {
-                requestId: request._id,
-                fileId: cleanFileId,
-                fileName: file.fileName,
-                sizeBytes: file.sizeBytes,
-                receiverId: cleanReceiverId,
-                autoApproved: file.autoApprove
-              });
-            }
-            break;
-          }
-
-          // C. Sender approves access
-          case 'approve_request': {
-            const { fileId, receiverId } = data || {};
-            if (!fileId || typeof fileId !== 'string' || !receiverId || typeof receiverId !== 'string') {
+            if (!room) {
+              // If we couldn't pair because guestId is no longer null (someone else joined first)
+              sendJson(ws, 'error_message', { message: 'Room is already full' });
               return;
             }
 
-            const cleanFileId = fileId.trim().toLowerCase();
-            const cleanReceiverId = receiverId.trim();
+            logger.info(`[Room] Guest ${cleanUserId} joined room ${cleanRoomCode} (host: ${room.hostId})`);
 
-            const file = await File.findOne({ fileId: cleanFileId });
-            if (!file) return;
+            // Notify the guest that they've joined
+            sendJson(ws, 'peer_joined', { peerId: room.hostId, roomCode: cleanRoomCode });
 
-            // Verify sender authentication
-            if (file.senderId !== authenticatedUserId) {
-              logger.warn(`Unauthorized approve_request attempt on file ${cleanFileId} by user ${authenticatedUserId}`);
-              return;
-            }
-
-            await Request.findOneAndUpdate(
-              { fileId: cleanFileId, receiverId: cleanReceiverId },
-              { status: 'APPROVED' }
-            );
-
-            logger.info(`Access approved by sender for file ${cleanFileId} to receiver ${cleanReceiverId}`);
-
-            // Forward approval status to receiver
-            const receiverWs = clients.get(cleanReceiverId);
-            if (receiverWs) {
-              sendJson(receiverWs, 'request_status_update', {
-                fileId: cleanFileId,
-                status: 'APPROVED',
-                senderId: file.senderId
-              });
+            // Notify the host that a guest has joined
+            const hostWs = clients.get(room.hostId);
+            if (hostWs) {
+              sendJson(hostWs, 'peer_joined', { peerId: cleanUserId, roomCode: cleanRoomCode });
             }
             break;
           }
@@ -253,26 +231,28 @@ export const initWebSocketServer = (httpServer) => {
             break;
           }
 
-          // G. Track completion
-          case 'transfer_completed': {
-            const { fileId, receiverId } = data || {};
-            if (!fileId || typeof fileId !== 'string' || !receiverId || typeof receiverId !== 'string') return;
+          // G. Leave room and notify peer
+          case 'leave_room': {
+            const { roomCode } = data || {};
+            if (!roomCode || typeof roomCode !== 'string') return;
 
-            const cleanFileId = fileId.trim().toLowerCase();
-            const cleanReceiverId = receiverId.trim();
+            const cleanRoomCode = roomCode.trim().toLowerCase();
+            const room = await Room.findOne({ roomCode: cleanRoomCode });
 
-            await Request.findOneAndUpdate(
-              { fileId: cleanFileId, receiverId: cleanReceiverId },
-              { status: 'COMPLETED' }
-            );
-            logger.info(`Transfer of file ${cleanFileId} to receiver ${cleanReceiverId} completed successfully.`);
+            if (room) {
+              // Determine who the peer is (the other user in the room)
+              const peerId = room.hostId === authenticatedUserId ? room.guestId : room.hostId;
 
-            // Relay the completion event back to the sender
-            const fileRecord = await File.findOne({ fileId: cleanFileId });
-            if (fileRecord) {
-              const senderWs = clients.get(fileRecord.senderId);
-              if (senderWs) {
-                sendJson(senderWs, 'transfer_completed', { fileId: cleanFileId, receiverId: cleanReceiverId });
+              // Delete the room from database
+              await Room.deleteOne({ roomCode: cleanRoomCode });
+              logger.info(`[Room] Room ${cleanRoomCode} deleted by ${authenticatedUserId}`);
+
+              // Notify the peer if they are online
+              if (peerId) {
+                const peerWs = clients.get(peerId);
+                if (peerWs) {
+                  sendJson(peerWs, 'peer_left', { peerId: authenticatedUserId });
+                }
               }
             }
             break;
@@ -301,18 +281,8 @@ export const initWebSocketServer = (httpServer) => {
             { userId: authenticatedUserId },
             { isOnline: false, socketId: null, lastSeen: new Date() }
           );
-          
-          // Removed instant pruning of offline sender sessions to allow persistence across page reloads.
-          // Files will eventually expire according to their TTL (4 hours).
-          // const userFiles = await File.find({ senderId: authenticatedUserId });
-          // const fileIds = userFiles.map(f => f.fileId);
-          // if (fileIds.length > 0) {
-          //   await File.deleteMany({ senderId: authenticatedUserId });
-          //   await Request.deleteMany({ fileId: { $in: fileIds } });
-          //   logger.info(`Pruned offline sender session details: ${fileIds.length} files removed.`);
-          // }
         } catch (err) {
-          logger.error(`Database error during session pruning for user ${authenticatedUserId}: ${err.message}`);
+          logger.error(`Database error during session cleanup for user ${authenticatedUserId}: ${err.message}`);
         }
       }
     });
