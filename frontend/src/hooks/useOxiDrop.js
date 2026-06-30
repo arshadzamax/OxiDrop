@@ -94,9 +94,35 @@ export function useOxiDrop() {
   useEffect(() => { roomCodeRef.current = roomCode; }, [roomCode]);
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
 
-  // Host configuration resolution loaded automatically by Vite based on environment modes (.env.development / .env.production)
-  const API_HOST = import.meta.env.VITE_API_HOST || 'http://localhost:5000';
-  const WS_HOST = import.meta.env.VITE_WS_HOST || 'ws://localhost:5000';
+  // Host configuration resolution loaded automatically by Vite, fallback dynamically auto-detects protocol/domain in production
+  const getHosts = () => {
+    // If explicit env variables are provided, respect them
+    if (import.meta.env.VITE_API_HOST && import.meta.env.VITE_WS_HOST) {
+      return {
+        api: import.meta.env.VITE_API_HOST,
+        ws: import.meta.env.VITE_WS_HOST
+      };
+    }
+
+    const host = typeof window !== 'undefined' ? window.location.host : 'localhost:5173';
+    const isSecure = typeof window !== 'undefined' && window.location.protocol === 'https:';
+
+    // If running locally in development, default to local port 5000
+    if (host.includes('localhost') || host.includes('127.0.0.1')) {
+      return {
+        api: import.meta.env.VITE_API_HOST || 'http://localhost:5000',
+        ws: import.meta.env.VITE_WS_HOST || 'ws://localhost:5000'
+      };
+    }
+
+    // In production, default to co-locating with the current domain and match HTTPS/WSS secure protocols
+    return {
+      api: import.meta.env.VITE_API_HOST || `${window.location.protocol}//${host}`,
+      ws: import.meta.env.VITE_WS_HOST || `${isSecure ? 'wss:' : 'ws:'}//${host}`
+    };
+  };
+
+  const { api: API_HOST, ws: WS_HOST } = getHosts();
 
   // Dynamic ICE server configurations
   const [iceConfiguration, setIceConfiguration] = useState({
