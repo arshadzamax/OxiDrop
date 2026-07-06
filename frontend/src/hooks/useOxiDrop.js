@@ -87,6 +87,7 @@ export function useOxiDrop() {
   const peerIdRef = useRef('');
   const roomCodeRef = useRef('');
   const isHostRef = useRef(false);
+  const remoteIceCandidatesQueueRef = useRef([]);
 
   useEffect(() => { selectedFileRef.current = selectedFile; }, [selectedFile]);
   useEffect(() => { receiverFileMetaRef.current = receiverFileMeta; }, [receiverFileMeta]);
@@ -298,6 +299,7 @@ export function useOxiDrop() {
   };
 
   const cleanupWebRTC = () => {
+    remoteIceCandidatesQueueRef.current = [];
     if (statsIntervalRef.current) {
       clearInterval(statsIntervalRef.current);
       statsIntervalRef.current = null;
@@ -533,10 +535,30 @@ export function useOxiDrop() {
     }
   };
 
+  const processQueuedIceCandidates = async () => {
+    const pc = peerConnRef.current;
+    if (!pc) return;
+    const queue = remoteIceCandidatesQueueRef.current;
+    if (queue.length > 0) {
+      addDevLog(`Processing ${queue.length} queued remote ICE candidates...`, 'ice');
+      while (queue.length > 0) {
+        const candidate = queue.shift();
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          const candType = candidate.candidate ? candidate.candidate.split(' ')[7] : 'unknown';
+          addDevLog('Successfully added queued remote ICE candidate: type=' + candType, 'ice');
+        } catch (err) {
+          console.error('Error adding queued remote ICE candidate:', err);
+        }
+      }
+    }
+  };
+
   const handleReceiveAnswer = async (sdpAnswer) => {
     if (!peerConnRef.current) return;
     try {
       await peerConnRef.current.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sdpAnswer }));
+      await processQueuedIceCandidates();
     } catch (err) {
       console.error('Error setting remote description:', err);
       clearConnectionTimeout();
@@ -613,6 +635,7 @@ export function useOxiDrop() {
 
       addDevLog('Setting remote WebRTC description (Offer)...', 'webrtc');
       await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sdpOffer }));
+      await processQueuedIceCandidates();
 
       addDevLog('Creating WebRTC SDP Answer...', 'webrtc');
       const answer = await pc.createAnswer();
@@ -633,9 +656,19 @@ export function useOxiDrop() {
   };
 
   const handleReceiveIceCandidate = async (candidate) => {
-    if (!peerConnRef.current) return;
+    const pc = peerConnRef.current;
+    if (!pc) return;
+
+    if (!pc.remoteDescription) {
+      addDevLog('Queueing remote ICE candidate (remoteDescription not set yet)', 'ice');
+      remoteIceCandidatesQueueRef.current.push(candidate);
+      return;
+    }
+
     try {
-      await peerConnRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      const candType = candidate.candidate ? candidate.candidate.split(' ')[7] : 'unknown';
+      addDevLog('Added remote ICE candidate: type=' + candType, 'ice');
     } catch (err) {
       console.error('Error adding remote ICE candidate:', err);
     }
