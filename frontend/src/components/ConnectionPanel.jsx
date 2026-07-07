@@ -7,6 +7,7 @@ export function ConnectionPanel({
   isHost,
   peerConnected,
   peerId,
+  connectionError,
   onCreateRoom,
   onJoinRoom,
   onLeaveRoom
@@ -79,13 +80,52 @@ export function ConnectionPanel({
     );
   }
 
+  // Helper to resolve current connection text and icons
+  const getStatusDisplay = () => {
+    if (peerConnected) {
+      return {
+        icon: <Wifi size={16} style={{ color: '#00ffbb' }} />,
+        text: 'Peer Connected',
+        class: 'connected'
+      };
+    }
+    if (connectionError === 'timeout') {
+      return {
+        icon: <WifiOff size={16} style={{ color: '#ff4a5a' }} />,
+        text: 'Connection Timed Out',
+        class: 'error'
+      };
+    }
+    if (connectionError === 'failed') {
+      return {
+        icon: <WifiOff size={16} style={{ color: '#ff4a5a' }} />,
+        text: 'Connection Failed',
+        class: 'error'
+      };
+    }
+    if (peerId) {
+      return {
+        icon: <Loader2 size={16} className="spin" style={{ color: '#00d2ff' }} />,
+        text: 'Connecting...',
+        class: 'connecting'
+      };
+    }
+    return {
+      icon: <Loader2 size={16} className="spin" />,
+      text: 'Waiting for peer...',
+      class: 'waiting'
+    };
+  };
+
+  const statusDisplay = getStatusDisplay();
+
   // In a room
   return (
     <div className="connection-panel">
       <div className="connection-panel-header">
-        <div className="connection-panel-title">
-          {peerConnected ? <Wifi size={16} /> : <Loader2 size={16} className="spin" />}
-          <span>{peerConnected ? 'Peer Connected' : 'Waiting for peer...'}</span>
+        <div className={`connection-panel-title status-${statusDisplay.class}`}>
+          {statusDisplay.icon}
+          <span>{statusDisplay.text}</span>
         </div>
         <button className="btn btn-secondary connection-leave-btn" onClick={onLeaveRoom}>
           <LogOut size={12} />

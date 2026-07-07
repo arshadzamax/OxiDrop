@@ -22,6 +22,7 @@ function App() {
     isHost,
     peerConnected,
     peerId,
+    connectionError,
     selectedFile,
     senderProgress,
     senderTransferSpeed,
@@ -81,6 +82,7 @@ function App() {
               isHost={isHost}
               peerConnected={peerConnected}
               peerId={peerId}
+              connectionError={connectionError}
               onCreateRoom={createRoom}
               onJoinRoom={joinRoom}
               onLeaveRoom={leaveRoom}

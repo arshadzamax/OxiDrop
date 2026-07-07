@@ -35,6 +35,7 @@ export function useOxiDrop() {
   const [isHost, setIsHost] = useState(false);
   const [peerConnected, setPeerConnected] = useState(false);
   const [peerId, setPeerId] = useState('');
+  const [connectionError, setConnectionError] = useState(null);
 
   // Sender state
   const [selectedFile, setSelectedFile] = useState(null);
@@ -243,6 +244,7 @@ export function useOxiDrop() {
           case 'peer_joined':
             addDevLog('Peer joined the room: ' + data.peerId, 'signaling');
             setPeerId(data.peerId);
+            setConnectionError(null);
             addNotification('Peer connected! Establishing P2P tunnel...', 'info');
             // Only the host initiates the WebRTC offer to avoid glare (both sides offering)
             if (isHostRef.current) {
@@ -343,6 +345,7 @@ export function useOxiDrop() {
         setIsDownloading(false);
         setSenderTransferSpeed(0);
         setReceiverTransferSpeed(0);
+        setConnectionError('timeout');
         addNotification('WebRTC connection setup timed out. The peer might be offline or behind a restrictive NAT/Firewall.', 'error');
       }
     }, 25000);
@@ -424,6 +427,7 @@ export function useOxiDrop() {
       addNotification('WebSocket not connected. Please wait...', 'error');
       return;
     }
+    setConnectionError(null);
     addDevLog('Requesting room creation...', 'signaling');
     socketRef.current.send(JSON.stringify({ type: 'create_room', data: { userId } }));
   };
@@ -437,6 +441,7 @@ export function useOxiDrop() {
       addNotification('Please enter a room code.', 'error');
       return;
     }
+    setConnectionError(null);
     addDevLog('Joining room: ' + code.trim(), 'signaling');
     setRoomCode(code.trim());
     setIsHost(false);
@@ -449,6 +454,7 @@ export function useOxiDrop() {
       addDevLog('Leaving room: ' + roomCodeRef.current, 'signaling');
       socketRef.current.send(JSON.stringify({ type: 'leave_room', data: { userId, roomCode: roomCodeRef.current } }));
     }
+    setConnectionError(null);
     cleanupWebRTC();
     clearConnectionTimeout();
     setPeerConnected(false);
@@ -491,7 +497,9 @@ export function useOxiDrop() {
         addDevLog('WebRTC Peer connection state changed: ' + pc.connectionState, 'webrtc');
         if (pc.connectionState === 'connected') {
           clearConnectionTimeout();
+          setConnectionError(null);
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+          const prevState = pc.connectionState;
           clearConnectionTimeout();
           cleanupWebRTC();
           setPeerConnected(false);
@@ -499,6 +507,9 @@ export function useOxiDrop() {
           setIsDownloading(false);
           setSenderTransferSpeed(0);
           setReceiverTransferSpeed(0);
+          if (prevState === 'failed' || prevState === 'disconnected') {
+            setConnectionError('failed');
+          }
         }
       };
 
@@ -609,7 +620,9 @@ export function useOxiDrop() {
         addDevLog('WebRTC Peer connection state changed: ' + pc.connectionState, 'webrtc');
         if (pc.connectionState === 'connected') {
           clearConnectionTimeout();
+          setConnectionError(null);
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+          const prevState = pc.connectionState;
           clearConnectionTimeout();
           cleanupWebRTC();
           setPeerConnected(false);
@@ -617,6 +630,9 @@ export function useOxiDrop() {
           setIsUploading(false);
           setReceiverTransferSpeed(0);
           setSenderTransferSpeed(0);
+          if (prevState === 'failed' || prevState === 'disconnected') {
+            setConnectionError('failed');
+          }
         }
       };
 
@@ -988,6 +1004,7 @@ export function useOxiDrop() {
     isHost,
     peerConnected,
     peerId,
+    connectionError,
     selectedFile,
     senderProgress,
     senderTransferSpeed,
