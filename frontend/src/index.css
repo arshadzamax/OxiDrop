@@ -988,6 +988,33 @@ body {
   color: var(--green);
 }
 
+/* Dev Console Connection Telemetry Stats Styles */
+.dev-console-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: #0d1117;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 10px;
+}
+
+.stat-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: #161b22;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.stat-pill strong {
+  color: var(--accent);
+}
+
 /* ═══ QR CODE DISPLAY ═══ */
 
 .qr-code-section {

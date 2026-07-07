@@ -100,6 +100,15 @@ export function DeveloperConsole({
         ))}
       </div>
 
+      {peerConnected && webrtcStats && webrtcStats.active && (
+        <div className="dev-console-stats">
+          <span className="stat-pill">Route: <strong>{webrtcStats.connectionType}</strong></span>
+          {webrtcStats.rtt !== null && <span className="stat-pill">RTT: <strong>{webrtcStats.rtt}ms</strong></span>}
+          <span className="stat-pill">Local Candidate: <strong>{webrtcStats.localCandidateType}</strong></span>
+          <span className="stat-pill">Remote Candidate: <strong>{webrtcStats.remoteCandidateType}</strong></span>
+        </div>
+      )}
+
       <div className="dev-console-logs" ref={scrollRef}>
         {logs.length === 0 ? (
           <div className="logs-empty">Console initialized. Ready to debug WebRTC connections...</div>
