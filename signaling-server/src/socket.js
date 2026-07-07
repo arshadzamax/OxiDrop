@@ -95,13 +95,34 @@ export const initWebSocketServer = (httpServer) => {
             logger.info(`[Socket Registry] User online: ${cleanUserId}`);
 
             await User.findOneAndUpdate(
-              { userId: cleanUserId },
-              { socketId: 'ws_active', isOnline: true, lastSeen: new Date() },
-              { upsert: true, new: true }
-            );
-
-            sendJson(ws, 'registered', { userId: cleanUserId });
-            break;
+               { userId: cleanUserId },
+               { socketId: 'ws_active', isOnline: true, lastSeen: new Date() },
+               { upsert: true, new: true }
+             );
+ 
+             sendJson(ws, 'registered', { userId: cleanUserId });
+ 
+             try {
+               // 1. If this reconnected user is a Host and a Guest is already in the room
+               const hostRoom = await Room.findOne({ hostId: cleanUserId });
+               if (hostRoom && hostRoom.guestId) {
+                 logger.info(`[Reconnect Sync] Host ${cleanUserId} recovered connection. Notifying Host about existing Guest ${hostRoom.guestId}`);
+                 sendJson(ws, 'peer_joined', { peerId: hostRoom.guestId, roomCode: hostRoom.roomCode });
+               }
+ 
+               // 2. If this reconnected user is a Guest and is already paired in a room
+               const guestRoom = await Room.findOne({ guestId: cleanUserId });
+               if (guestRoom) {
+                 logger.info(`[Reconnect Sync] Guest ${cleanUserId} recovered connection. Notifying Host ${guestRoom.hostId} to restart handshake`);
+                 const hostWs = clients.get(guestRoom.hostId);
+                 if (hostWs) {
+                   sendJson(hostWs, 'peer_joined', { peerId: cleanUserId, roomCode: guestRoom.roomCode });
+                 }
+               }
+             } catch (err) {
+               logger.error(`[Reconnect Sync] Error during state recovery for ${cleanUserId}: ${err.message}`, err);
+             }
+             break;
           }
 
           // B. Host creates a new room for pairing
