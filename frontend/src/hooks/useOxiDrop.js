@@ -139,6 +139,7 @@ export function useOxiDrop() {
         const res = await fetch(`${API_HOST}/api/webrtc/ice-servers`);
         if (res.ok) {
           const config = await res.json();
+          console.log('Fetched ICE servers from signaling server:', config.iceServers);
           setIceConfiguration({ iceServers: config.iceServers });
 
           // Verify if TURN servers were loaded successfully
@@ -237,6 +238,7 @@ export function useOxiDrop() {
             addDevLog('Room created successfully. Room code: ' + data.roomCode, 'signaling');
             setRoomCode(data.roomCode);
             setIsHost(true);
+            isHostRef.current = true; // Set synchronously to avoid peer_joined race condition
             break;
           case 'peer_joined':
             addDevLog('Peer joined the room: ' + data.peerId, 'signaling');
@@ -438,6 +440,7 @@ export function useOxiDrop() {
     addDevLog('Joining room: ' + code.trim(), 'signaling');
     setRoomCode(code.trim());
     setIsHost(false);
+    isHostRef.current = false; // Set synchronously
     socketRef.current.send(JSON.stringify({ type: 'join_room', data: { userId, roomCode: code.trim() } }));
   };
 
@@ -452,6 +455,7 @@ export function useOxiDrop() {
     setPeerId('');
     setRoomCode('');
     setIsHost(false);
+    isHostRef.current = false; // Set synchronously
     resetTransferState();
     addNotification('Disconnected from room.', 'info');
   };
@@ -469,8 +473,11 @@ export function useOxiDrop() {
       // Handle Trickle ICE Candidates
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          const candType = event.candidate.candidate ? event.candidate.candidate.split(' ')[7] : 'unknown';
-          addDevLog('Gathered local ICE candidate: type=' + candType, 'ice');
+          const candStr = event.candidate.candidate;
+          const parts = candStr.split(' ');
+          const ip = parts[4] || 'unknown';
+          const candType = parts[7] || 'unknown';
+          addDevLog(`Gathered local ICE candidate: type=${candType} IP=${ip}`, 'ice');
           if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
             socketRef.current.send(JSON.stringify({
               type: 'send_ice_candidate',
@@ -545,8 +552,11 @@ export function useOxiDrop() {
         const candidate = queue.shift();
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          const candType = candidate.candidate ? candidate.candidate.split(' ')[7] : 'unknown';
-          addDevLog('Successfully added queued remote ICE candidate: type=' + candType, 'ice');
+          const candStr = candidate.candidate;
+          const parts = candStr.split(' ');
+          const ip = parts[4] || 'unknown';
+          const candType = parts[7] || 'unknown';
+          addDevLog(`Successfully added queued remote ICE candidate: type=${candType} IP=${ip}`, 'ice');
         } catch (err) {
           console.error('Error adding queued remote ICE candidate:', err);
         }
@@ -581,8 +591,11 @@ export function useOxiDrop() {
       // Handle Trickle ICE Candidates
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          const candType = event.candidate.candidate ? event.candidate.candidate.split(' ')[7] : 'unknown';
-          addDevLog('Gathered local ICE candidate: type=' + candType, 'ice');
+          const candStr = event.candidate.candidate;
+          const parts = candStr.split(' ');
+          const ip = parts[4] || 'unknown';
+          const candType = parts[7] || 'unknown';
+          addDevLog(`Gathered local ICE candidate: type=${candType} IP=${ip}`, 'ice');
           if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
             socketRef.current.send(JSON.stringify({
               type: 'send_ice_candidate',
@@ -667,8 +680,11 @@ export function useOxiDrop() {
 
     try {
       await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      const candType = candidate.candidate ? candidate.candidate.split(' ')[7] : 'unknown';
-      addDevLog('Added remote ICE candidate: type=' + candType, 'ice');
+      const candStr = candidate.candidate;
+      const parts = candStr.split(' ');
+      const ip = parts[4] || 'unknown';
+      const candType = parts[7] || 'unknown';
+      addDevLog(`Added remote ICE candidate: type=${candType} IP=${ip}`, 'ice');
     } catch (err) {
       console.error('Error adding remote ICE candidate:', err);
     }
