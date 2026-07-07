@@ -279,6 +279,12 @@ export const initWebSocketServer = (httpServer) => {
             break;
           }
 
+          // H. Client heartbeat ping
+          case 'ping': {
+            sendJson(ws, 'pong', {});
+            break;
+          }
+ 
           default:
             logger.warn(`Unregistered WebSocket event type parsed: ${type}`);
         }

@@ -89,6 +89,7 @@ export function useOxiDrop() {
   const roomCodeRef = useRef('');
   const isHostRef = useRef(false);
   const remoteIceCandidatesQueueRef = useRef([]);
+  const heartbeatIntervalRef = useRef(null);
 
   useEffect(() => { selectedFileRef.current = selectedFile; }, [selectedFile]);
   useEffect(() => { receiverFileMetaRef.current = receiverFileMeta; }, [receiverFileMeta]);
@@ -182,6 +183,7 @@ export function useOxiDrop() {
     return () => {
       if (socketRef.current) socketRef.current.close();
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
       cleanupWebRTC();
       clearConnectionTimeout();
     };
@@ -230,6 +232,14 @@ export function useOxiDrop() {
       setSocketConnected(true);
       addDevLog('WebSocket connection opened. Registering user session: ' + userId, 'signaling');
       ws.send(JSON.stringify({ type: 'register_user', data: { userId } }));
+
+      // Start client-to-server heartbeat to prevent Render/Heroku proxy idle timeout
+      if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping' }));
+        }
+      }, 25000);
     };
     ws.onmessage = async (event) => {
       try {
@@ -281,6 +291,10 @@ export function useOxiDrop() {
       }
     };
     ws.onclose = () => {
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
+      }
       setSocketConnected(false);
       addDevLog('WebSocket connection closed. Retrying connection in 3 seconds...', 'signaling');
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
