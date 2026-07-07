@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { Link, Unlink, Copy, Check, Wifi, WifiOff, Loader2, Plus, LogOut } from 'lucide-react';
+import { Link, Unlink, Copy, Check, Wifi, WifiOff, Loader2, Plus, LogOut, QrCode } from 'lucide-react';
+import { QRCodeDisplay } from './QRCodeDisplay';
+import { QRScannerModal } from './QRScannerModal';
 
 export function ConnectionPanel({
   socketConnected,
@@ -14,6 +16,7 @@ export function ConnectionPanel({
 }) {
   const [joinInput, setJoinInput] = useState('');
   const [copied, setCopied] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   const copyRoomCode = () => {
     navigator.clipboard.writeText(roomCode);
@@ -66,6 +69,16 @@ export function ConnectionPanel({
                 disabled={!socketConnected}
               />
               <button
+                className="btn btn-secondary scan-btn"
+                onClick={() => setScannerOpen(true)}
+                disabled={!socketConnected}
+                title="Scan QR Code"
+                id="scan-qr-modal-trigger"
+              >
+                <QrCode size={14} />
+                Scan QR
+              </button>
+              <button
                 className="btn btn-primary"
                 onClick={handleJoin}
                 disabled={!socketConnected || !joinInput.trim()}
@@ -76,6 +89,15 @@ export function ConnectionPanel({
             </div>
           </div>
         </div>
+
+        <QRScannerModal
+          isOpen={scannerOpen}
+          onClose={() => setScannerOpen(false)}
+          onScanSuccess={(code) => {
+            onJoinRoom(code);
+            setScannerOpen(false);
+          }}
+        />
       </div>
     );
   }
@@ -145,6 +167,19 @@ export function ConnectionPanel({
             </button>
           </div>
         </div>
+
+        {isHost && !peerConnected && (
+          <div className="qr-code-section">
+            <div className="qr-code-label">
+              <QrCode size={14} />
+              <span>Scan to join</span>
+            </div>
+            <div className="qr-code-wrapper">
+              <QRCodeDisplay value={roomCode} size={180} />
+            </div>
+            <div className="qr-code-hint">Scan with OxiDrop Mobile to connect instantly</div>
+          </div>
+        )}
 
         <div className="connection-status-row">
           <div className="connection-status-item">
