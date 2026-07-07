@@ -152,7 +152,7 @@ export function QRScannerModal({ isOpen, onClose, onScanSuccess }) {
             </div>
           )}
 
-          {hasPermission === 'denied' && (
+          {hasPermission === 'denied' ? (
             <div className="qr-scanner-error">
               <AlertCircle size={32} className="text-red" />
               <p>{errorMsg}</p>
@@ -160,10 +160,8 @@ export function QRScannerModal({ isOpen, onClose, onScanSuccess }) {
                 Close Scanner
               </button>
             </div>
-          )}
-
-          {hasPermission === 'granted' && (
-            <div className="qr-video-container">
+          ) : (
+            <div className="qr-video-container" style={{ display: hasPermission === 'granted' ? 'block' : 'none' }}>
               <video ref={videoRef} className="qr-video-feed" />
               <canvas ref={canvasRef} style={{ display: 'none' }} />
               
