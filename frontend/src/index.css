@@ -1085,7 +1085,9 @@ body {
   }
 
   .node-id {
-    display: none;
+    display: block;
+    font-size: 10px;
+    padding: 2px 6px;
   }
 
   .telemetry-top {
