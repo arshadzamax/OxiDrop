@@ -154,12 +154,12 @@ export function ThreeBackground() {
     const colorArray = colorAttribute.array;
     const sizeAttribute = geometry.attributes.size;
     const sizesArray = sizeAttribute.array;
-    const clock = new THREE.Clock();
+    const startTime = performance.now();
 
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
 
-      const elapsed = clock.getElapsedTime() * 0.8;
+      const elapsed = (performance.now() - startTime) * 0.001 * 0.8;
 
       const localMouse = mouse3D.clone();
       waveGrid.worldToLocal(localMouse);
