@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { sanitizeFileName, formatBytes } from '../utils/helpers';
+import { useFileTransfer } from './useFileTransfer';
 
 export function useOxiDrop() {
   const [userId] = useState(() => {
@@ -37,21 +37,6 @@ export function useOxiDrop() {
   const [peerId, setPeerId] = useState('');
   const [connectionError, setConnectionError] = useState(null);
 
-  // Sender state
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [senderProgress, setSenderProgress] = useState(0);
-  const [senderTransferSpeed, setSenderTransferSpeed] = useState(0);
-  const [isUploading, setIsUploading] = useState(false);
-
-  // Receiver state
-  const [receiverFileMeta, setReceiverFileMeta] = useState(null);
-  const [receiverProgress, setReceiverProgress] = useState(0);
-  const [receiverTransferSpeed, setReceiverTransferSpeed] = useState(0);
-  const [isDownloading, setIsDownloading] = useState(false);
-
-  // P2P file request/approval states
-  const [incomingFileOffer, setIncomingFileOffer] = useState(null);
-  const [fileOfferPending, setFileOfferPending] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
 
   // WebRTC Diagnostics stats
@@ -80,9 +65,6 @@ export function useOxiDrop() {
   const socketRef = useRef(null);
   const peerConnRef = useRef(null);
   const dataChannelRef = useRef(null);
-  const selectedFileRef = useRef(null);
-  const receiverFileMetaRef = useRef(null);
-  const fileWritableRef = useRef(null);
   const connectionTimeoutRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const peerIdRef = useRef('');
@@ -90,9 +72,8 @@ export function useOxiDrop() {
   const isHostRef = useRef(false);
   const remoteIceCandidatesQueueRef = useRef([]);
   const heartbeatIntervalRef = useRef(null);
+  const resetTransferStateRef = useRef(null);
 
-  useEffect(() => { selectedFileRef.current = selectedFile; }, [selectedFile]);
-  useEffect(() => { receiverFileMetaRef.current = receiverFileMeta; }, [receiverFileMeta]);
   useEffect(() => { peerIdRef.current = peerId; }, [peerId]);
   useEffect(() => { roomCodeRef.current = roomCode; }, [roomCode]);
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
@@ -177,6 +158,17 @@ export function useOxiDrop() {
     setTheme(next);
     localStorage.setItem('theme', next);
   };
+
+  const fileTransfer = useFileTransfer({
+    dataChannelRef,
+    addDevLog,
+    addNotification,
+    cleanupWebRTC
+  });
+
+  useEffect(() => {
+    resetTransferStateRef.current = fileTransfer.resetTransferState;
+  }, [fileTransfer.resetTransferState]);
 
   useEffect(() => {
     connectWebSocket();
@@ -303,20 +295,13 @@ export function useOxiDrop() {
   };
 
   const resetTransferState = () => {
-    setSelectedFile(null);
-    setSenderProgress(0);
-    setSenderTransferSpeed(0);
-    setIsUploading(false);
-    setReceiverFileMeta(null);
-    setReceiverProgress(0);
-    setReceiverTransferSpeed(0);
-    setIsDownloading(false);
-    setIncomingFileOffer(null);
-    setFileOfferPending(false);
     setChatMessages([]);
+    if (resetTransferStateRef.current) {
+      resetTransferStateRef.current();
+    }
   };
 
-  const cleanupWebRTC = () => {
+  function cleanupWebRTC() {
     remoteIceCandidatesQueueRef.current = [];
     if (statsIntervalRef.current) {
       clearInterval(statsIntervalRef.current);
@@ -342,9 +327,8 @@ export function useOxiDrop() {
       try { peerConnRef.current.close(); } catch {}
       peerConnRef.current = null;
     }
-    if (fileWritableRef.current) {
-      try { fileWritableRef.current.close(); } catch {}
-      fileWritableRef.current = null;
+    if (resetTransferStateRef.current) {
+      resetTransferStateRef.current();
     }
   };
 
@@ -352,16 +336,11 @@ export function useOxiDrop() {
   const startConnectionTimeout = () => {
     clearConnectionTimeout();
     connectionTimeoutRef.current = setTimeout(() => {
-      if (peerConnRef.current && peerConnRef.current.connectionState !== 'connected') {
-        cleanupWebRTC();
-        setPeerConnected(false);
-        setIsUploading(false);
-        setIsDownloading(false);
-        setSenderTransferSpeed(0);
-        setReceiverTransferSpeed(0);
-        setConnectionError('timeout');
-        addNotification('WebRTC connection setup timed out. The peer might be offline or behind a restrictive NAT/Firewall.', 'error');
-      }
+      addDevLog('WebRTC connection establishment timed out (25s limit reached).', 'error');
+      cleanupWebRTC();
+      setPeerConnected(false);
+      setConnectionError('timeout');
+      addNotification('Connection timed out. Please check firewall or network compatibility.', 'error');
     }, 25000);
   };
 
@@ -373,22 +352,17 @@ export function useOxiDrop() {
   };
 
   const startStatsMonitoring = (pc) => {
-    if (statsIntervalRef.current) {
-      clearInterval(statsIntervalRef.current);
-    }
-    setWebrtcStats(prev => ({ ...prev, active: true }));
-
+    if (statsIntervalRef.current) clearInterval(statsIntervalRef.current);
     statsIntervalRef.current = setInterval(async () => {
-      if (!pc || pc.connectionState === 'closed') {
+      if (!pc || pc.signalingState === 'closed') {
         clearInterval(statsIntervalRef.current);
         return;
       }
-
       try {
         const stats = await pc.getStats();
+        let activePair = null;
         let localCand = null;
         let remoteCand = null;
-        let activePair = null;
 
         stats.forEach(report => {
           if (report.type === 'candidate-pair' && report.state === 'succeeded' && report.nominated) {
@@ -418,6 +392,15 @@ export function useOxiDrop() {
           else if (type === 'prflx') connType = 'Peer Reflexive';
         }
 
+        let bytesSent = 0;
+        let bytesReceived = 0;
+        stats.forEach(report => {
+          if (report.type === 'transport') {
+            bytesSent = report.bytesSent || 0;
+            bytesReceived = report.bytesReceived || 0;
+          }
+        });
+
         setWebrtcStats({
           active: true,
           connectionState: pc.connectionState,
@@ -426,11 +409,11 @@ export function useOxiDrop() {
           remoteCandidateType: remoteCand ? remoteCand.candidateType : '—',
           connectionType: connType,
           rtt,
-          bytesSent: activePair ? activePair.bytesSent : 0,
-          bytesReceived: activePair ? activePair.bytesReceived : 0
+          bytesSent,
+          bytesReceived
         });
       } catch (err) {
-        console.warn('Failed to fetch WebRTC connection stats:', err);
+        console.warn('Error reading WebRTC statistics:', err);
       }
     }, 1000);
   };
@@ -447,36 +430,32 @@ export function useOxiDrop() {
   };
 
   const joinRoom = (code) => {
-    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-      addNotification('WebSocket not connected. Please wait...', 'error');
+    if (!code || code.trim().length !== 6) {
+      addNotification('Invalid room code. Must be 6 alphanumeric characters.', 'error');
       return;
     }
-    if (!code || !code.trim()) {
-      addNotification('Please enter a room code.', 'error');
-      return;
-    }
-    setConnectionError(null);
-    addDevLog('Joining room: ' + code.trim(), 'signaling');
-    setRoomCode(code.trim());
+    const cleanCode = code.trim().toLowerCase();
+    addDevLog('Joining room: ' + cleanCode, 'signaling');
+    setRoomCode(cleanCode);
     setIsHost(false);
-    isHostRef.current = false; // Set synchronously
-    socketRef.current.send(JSON.stringify({ type: 'join_room', data: { userId, roomCode: code.trim() } }));
+    isHostRef.current = false; // Set synchronously to avoid peer_joined race condition
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: 'join_room', data: { userId, roomCode: cleanCode } }));
+    }
   };
 
   const leaveRoom = () => {
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN && roomCodeRef.current) {
-      addDevLog('Leaving room: ' + roomCodeRef.current, 'signaling');
+    if (!roomCodeRef.current) return;
+    addDevLog('Leaving room: ' + roomCodeRef.current, 'signaling');
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({ type: 'leave_room', data: { userId, roomCode: roomCodeRef.current } }));
     }
-    setConnectionError(null);
-    cleanupWebRTC();
-    clearConnectionTimeout();
-    setPeerConnected(false);
-    setPeerId('');
     setRoomCode('');
     setIsHost(false);
-    isHostRef.current = false; // Set synchronously
-    resetTransferState();
+    isHostRef.current = false;
+    setPeerConnected(false);
+    setPeerId('');
+    cleanupWebRTC();
     addNotification('Disconnected from room.', 'info');
   };
 
@@ -517,10 +496,6 @@ export function useOxiDrop() {
           clearConnectionTimeout();
           cleanupWebRTC();
           setPeerConnected(false);
-          setIsUploading(false);
-          setIsDownloading(false);
-          setSenderTransferSpeed(0);
-          setReceiverTransferSpeed(0);
           if (prevState === 'failed' || prevState === 'disconnected') {
             setConnectionError('failed');
           }
@@ -543,10 +518,6 @@ export function useOxiDrop() {
       dc.onclose = () => {
         addDevLog('WebRTC Data Channel closed.', 'webrtc');
         setPeerConnected(false);
-        setIsUploading(false);
-        setIsDownloading(false);
-        setSenderTransferSpeed(0);
-        setReceiverTransferSpeed(0);
       };
 
       const offer = await pc.createOffer();
@@ -599,8 +570,6 @@ export function useOxiDrop() {
       clearConnectionTimeout();
       cleanupWebRTC();
       setPeerConnected(false);
-      setIsUploading(false);
-      setSenderTransferSpeed(0);
     }
   };
 
@@ -640,10 +609,6 @@ export function useOxiDrop() {
           clearConnectionTimeout();
           cleanupWebRTC();
           setPeerConnected(false);
-          setIsDownloading(false);
-          setIsUploading(false);
-          setReceiverTransferSpeed(0);
-          setSenderTransferSpeed(0);
           if (prevState === 'failed' || prevState === 'disconnected') {
             setConnectionError('failed');
           }
@@ -669,10 +634,6 @@ export function useOxiDrop() {
         dc.onclose = () => {
           addDevLog('WebRTC Data Channel closed.', 'webrtc');
           setPeerConnected(false);
-          setIsUploading(false);
-          setIsDownloading(false);
-          setSenderTransferSpeed(0);
-          setReceiverTransferSpeed(0);
         };
       };
 
@@ -692,8 +653,6 @@ export function useOxiDrop() {
       clearConnectionTimeout();
       cleanupWebRTC();
       setPeerConnected(false);
-      setIsDownloading(false);
-      setReceiverTransferSpeed(0);
       addNotification('Failed to establish WebRTC connection: ' + err.message, 'error');
     }
   };
@@ -720,208 +679,25 @@ export function useOxiDrop() {
     }
   };
 
-  // ── DataChannel protocol handler ──
+  // ── DataChannel message router ──
   const handleDataChannelMessage = (e, dc) => {
-    // Binary data = file chunk
-    if (e.data instanceof ArrayBuffer) {
-      handleReceiveChunk(e.data);
-      return;
-    }
-
-    // JSON control messages
     try {
       const msg = JSON.parse(e.data);
-      switch (msg.type) {
-        case 'chat':
-          addDevLog(`Received P2P test message: "${msg.text}"`, 'stream');
-          setChatMessages(prev => [...prev, {
-            senderId: peerIdRef.current || 'Peer',
-            text: msg.text,
-            time: new Date().toTimeString().split(' ')[0]
-          }]);
-          addNotification(`P2P Message: "${msg.text}"`, 'info');
-          break;
-        case 'file_offer':
-          addDevLog(`Received file offer from peer: ${msg.name} (${formatBytes(msg.size)})`, 'stream');
-          setIncomingFileOffer({ name: msg.name, size: msg.size });
-          break;
-        case 'file_accept':
-          addDevLog('Peer accepted file offer. Starting file stream...', 'stream');
-          setFileOfferPending(false);
-          startFileStreaming(dc);
-          break;
-        case 'file_reject':
-          addDevLog('Peer declined file offer.', 'stream');
-          setFileOfferPending(false);
-          setSelectedFile(null);
-          addNotification('File transfer request was declined by the receiver.', 'error');
-          break;
-        case 'file_complete':
-          addDevLog('Received file_complete signal from sender.', 'stream');
-          finalizeReceivedFile();
-          break;
-      }
-    } catch {
-      // Ignore non-JSON, non-binary messages
-    }
-  };
-
-  // ── Receiver: chunk accumulation ──
-  const receiverBufRef = useRef([]);
-  const receiverBytesRef = useRef(0);
-  const receiverSpeedBytesRef = useRef(0);
-  const receiverSpeedTimeRef = useRef(performance.now());
-  const receiverLastLoggedPctRef = useRef(-1);
-  const receiverWriteQueueRef = useRef(Promise.resolve());
-
-  const handleReceiveChunk = (data) => {
-    receiverBytesRef.current += data.byteLength;
-    receiverSpeedBytesRef.current += data.byteLength;
-    const now = performance.now();
-    if (now - receiverSpeedTimeRef.current >= 1000) {
-      setReceiverTransferSpeed(((receiverSpeedBytesRef.current / (1024 * 1024)) / ((now - receiverSpeedTimeRef.current) / 1000)).toFixed(2));
-      receiverSpeedBytesRef.current = 0;
-      receiverSpeedTimeRef.current = now;
-    }
-
-    const meta = receiverFileMetaRef.current;
-    if (!meta) return;
-    const progressPct = Math.round((receiverBytesRef.current / meta.sizeBytes) * 100);
-    setReceiverProgress(progressPct);
-
-    if (progressPct % 10 === 0 && progressPct !== receiverLastLoggedPctRef.current) {
-      addDevLog(`Received chunk: ${formatBytes(receiverBytesRef.current)} / ${formatBytes(meta.sizeBytes)} (${progressPct}%)`, 'stream');
-      receiverLastLoggedPctRef.current = progressPct;
-    }
-
-    if (fileWritableRef.current) {
-      const chunkData = data;
-      receiverWriteQueueRef.current = receiverWriteQueueRef.current.then(async () => {
-        try {
-          await fileWritableRef.current.write(chunkData);
-        } catch (err) {
-          addDevLog('Failed direct disk write chunk: ' + err.message, 'error');
-          console.error('Failed streaming chunk directly to disk path:', err);
-        }
-      });
-    } else {
-      receiverBufRef.current.push(data);
-    }
-  };
-
-  const promptSaveLocation = async (fileName) => {
-    if ('showSaveFilePicker' in window) {
-      try {
-        const handle = await window.showSaveFilePicker({
-          suggestedName: fileName,
-        });
-        fileWritableRef.current = await handle.createWritable();
-      } catch (err) {
-        console.warn('Save file picker cancelled or failed. Falling back to browser memory buffer.', err);
-        fileWritableRef.current = null;
-      }
-    }
-  };
-
-  const finalizeReceivedFile = async () => {
-    setIsDownloading(false);
-    setReceiverProgress(100);
-    setReceiverTransferSpeed(0);
-    addDevLog('All file bytes received successfully. Saving file...', 'stream');
-
-    const meta = receiverFileMetaRef.current;
-    if (!meta) return;
-
-    if (fileWritableRef.current) {
-      receiverWriteQueueRef.current = receiverWriteQueueRef.current.then(async () => {
-        try {
-          await fileWritableRef.current.close();
-          fileWritableRef.current = null;
-          addDevLog('Direct disk file writer closed successfully.', 'stream');
-          addNotification('File downloaded successfully!', 'success');
-        } catch (err) {
-          addDevLog('Error closing local file descriptor: ' + err.message, 'error');
-          console.error('Failed to close local file descriptor:', err);
-        }
-      });
-    } else {
-      const url = URL.createObjectURL(new Blob(receiverBufRef.current));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = sanitizeFileName(meta.fileName);
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      addDevLog('Triggered standard browser blob download.', 'stream');
-      addNotification('File downloaded successfully!', 'success');
-    }
-
-    // Reset receiver accumulators for next transfer
-    receiverBufRef.current = [];
-    receiverBytesRef.current = 0;
-    receiverSpeedBytesRef.current = 0;
-    receiverLastLoggedPctRef.current = -1;
-  };
-
-  // ── Sender: file selection & streaming ──
-  const handleFileChange = (e) => {
-    if (e.target.files.length > 0) {
-      const file = e.target.files[0];
-
-      // Enforce client-side file size limits before registration
-      if (file.size > 10 * 1024 * 1024 * 1024 * 1024) { // 10 Terabytes
-        addNotification('File exceeds the 10TB safety limit.', 'error');
+      if (msg.type === 'chat') {
+        addDevLog(`Received P2P test message: "${msg.text}"`, 'stream');
+        setChatMessages(prev => [...prev, {
+          senderId: peerIdRef.current || 'Peer',
+          text: msg.text,
+          time: new Date().toTimeString().split(' ')[0]
+        }]);
+        addNotification(`P2P Message: "${msg.text}"`, 'info');
         return;
       }
-
-      setSelectedFile(file);
-      setSenderProgress(0);
-      setIsUploading(false);
-    }
-  };
-
-  const sendFile = () => {
-    const dc = dataChannelRef.current;
-    const file = selectedFileRef.current;
-    if (!dc || dc.readyState !== 'open' || !file) {
-      addNotification('No peer connection or file selected.', 'error');
-      return;
-    }
-    addDevLog(`Offering file to peer: ${file.name} (${formatBytes(file.size)})`, 'stream');
-    dc.send(JSON.stringify({ type: 'file_offer', name: file.name, size: file.size }));
-    setFileOfferPending(true);
-    setSenderProgress(0);
-  };
-
-  const acceptIncomingFile = async () => {
-    const dc = dataChannelRef.current;
-    const offer = incomingFileOffer;
-    if (!dc || dc.readyState !== 'open' || !offer) {
-      addNotification('No open data channel connection found.', 'error');
-      return;
+    } catch {
+      // Ignore parse error for binary chunks
     }
 
-    addDevLog(`Accepting incoming file: ${offer.name} (${formatBytes(offer.size)})`, 'stream');
-    setReceiverFileMeta({ fileName: offer.name, sizeBytes: offer.size });
-    setReceiverProgress(0);
-    setIsDownloading(true);
-
-    // Prompt save location using File System Access API if supported
-    await promptSaveLocation(offer.name);
-
-    addDevLog('Sending file_accept response to peer...', 'stream');
-    dc.send(JSON.stringify({ type: 'file_accept' }));
-    setIncomingFileOffer(null);
-  };
-
-  const rejectIncomingFile = () => {
-    const dc = dataChannelRef.current;
-    if (!dc || dc.readyState !== 'open') return;
-
-    addDevLog('Declining incoming file offer...', 'stream');
-    dc.send(JSON.stringify({ type: 'file_reject' }));
-    setIncomingFileOffer(null);
+    fileTransfer.handleDataChannelMessage(e, dc);
   };
 
   const sendChatMessage = (text) => {
@@ -943,72 +719,6 @@ export function useOxiDrop() {
     }]);
   };
 
-  const startFileStreaming = (dc) => {
-    if (!selectedFileRef.current) return;
-    const file = selectedFileRef.current;
-    const chunkSize = 65536;
-    let currentOffset = 0;
-    let bytesSent = 0;
-    let lastTime = performance.now();
-    let lastLoggedPct = -1;
-
-    addDevLog(`Starting file stream: ${file.name} (${formatBytes(file.size)})`, 'stream');
-
-    const stream = () => {
-      while (currentOffset < file.size) {
-        if (dc.bufferedAmount > 8 * 1024 * 1024) { setTimeout(stream, 15); return; }
-        const slice = file.slice(currentOffset, currentOffset + chunkSize);
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          if (dc.readyState !== 'open') return;
-          const chunk = event.target.result;
-          try {
-            dc.send(chunk);
-          } catch (e) {
-            addDevLog('Failed to send chunk via WebRTC: ' + e.message, 'error');
-            console.error('Failed to send chunk via WebRTC:', e);
-            cleanupWebRTC();
-            setIsUploading(false);
-            setSenderTransferSpeed(0);
-            return;
-          }
-          currentOffset += chunk.byteLength;
-          bytesSent += chunk.byteLength;
-          const now = performance.now();
-          if (now - lastTime >= 1000) {
-            setSenderTransferSpeed(((bytesSent / (1024 * 1024)) / ((now - lastTime) / 1000)).toFixed(2));
-            bytesSent = 0;
-            lastTime = now;
-          }
-          const progressPct = Math.round((currentOffset / file.size) * 100);
-          setSenderProgress(progressPct);
-
-          if (progressPct % 10 === 0 && progressPct !== lastLoggedPct) {
-            addDevLog(`Sent chunk: ${formatBytes(currentOffset)} / ${formatBytes(file.size)} (${progressPct}%)`, 'stream');
-            lastLoggedPct = progressPct;
-          }
-
-          if (currentOffset >= file.size) {
-            // All chunks sent, signal completion
-            setSenderProgress(100);
-            addDevLog('All file chunks pushed. Sending file_complete signal.', 'stream');
-            try {
-              dc.send(JSON.stringify({ type: 'file_complete' }));
-            } catch {}
-            setIsUploading(false);
-            setSenderTransferSpeed(0);
-            addNotification('File sent successfully!', 'success');
-            return;
-          }
-          stream();
-        };
-        reader.readAsArrayBuffer(slice);
-        return;
-      }
-    };
-    stream();
-  };
-
   return {
     userId,
     socketConnected,
@@ -1019,16 +729,6 @@ export function useOxiDrop() {
     peerConnected,
     peerId,
     connectionError,
-    selectedFile,
-    senderProgress,
-    senderTransferSpeed,
-    isUploading,
-    receiverFileMeta,
-    receiverProgress,
-    receiverTransferSpeed,
-    isDownloading,
-    incomingFileOffer,
-    fileOfferPending,
     webrtcStats,
     devLogs,
     addDevLog,
@@ -1039,11 +739,8 @@ export function useOxiDrop() {
     createRoom,
     joinRoom,
     leaveRoom,
-    handleFileChange,
-    sendFile,
-    acceptIncomingFile,
-    rejectIncomingFile,
     chatMessages,
-    sendChatMessage
+    sendChatMessage,
+    ...fileTransfer
   };
 }
