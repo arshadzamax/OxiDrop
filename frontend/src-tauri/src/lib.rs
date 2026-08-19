@@ -2,13 +2,79 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::str::FromStr;
 use tokio::sync::Mutex;
-use tokio::io::AsyncReadExt;
-use tauri::{State, Manager};
+use tauri::{State, Window, Emitter};
 use futures_util::StreamExt;
+use iroh::ticket::BlobTicket;
 
-// We store the active Iroh node in the Tauri global state context.
+#[derive(Clone, serde::Serialize)]
+pub struct IrohProgressPayload {
+    pub bytes_transferred: u64,
+    pub total_bytes: u64,
+    pub speed_bytes_per_sec: f64,
+    pub percent: f64,
+    pub status: String,
+}
+
+pub struct IrohNode {
+    pub pool: Arc<iroh_blobs::util::local_pool::LocalPool>,
+    pub endpoint: iroh::Endpoint,
+    pub store: iroh_blobs::store::mem::Store,
+    pub blobs: Arc<iroh_blobs::net_protocol::Blobs<iroh_blobs::store::mem::Store>>,
+    pub router: iroh::protocol::Router,
+}
+
 pub struct IrohState {
-    pub node: Arc<Mutex<Option<iroh::node::Node<iroh_blobs::store::mem::Store>>>>,
+    pub node: Arc<Mutex<Option<IrohNode>>>,
+}
+
+impl IrohState {
+    pub async fn get_or_spawn(&self) -> Result<IrohNode, String> {
+        let mut guard = self.node.lock().await;
+        if let Some(ref node) = *guard {
+            return Ok(IrohNode {
+                pool: node.pool.clone(),
+                endpoint: node.endpoint.clone(),
+                store: node.store.clone(),
+                blobs: node.blobs.clone(),
+                router: node.router.clone(),
+            });
+        }
+
+        let endpoint = iroh::Endpoint::builder()
+            .discovery_n0()
+            .bind()
+            .await
+            .map_err(|e| format!("Failed to bind Iroh endpoint: {}", e))?;
+
+        let pool = Arc::new(iroh_blobs::util::local_pool::LocalPool::default());
+        let store = iroh_blobs::store::mem::Store::new();
+        let blobs = iroh_blobs::net_protocol::Blobs::builder(store.clone())
+            .build(pool.handle(), &endpoint);
+
+        let router = iroh::protocol::Router::builder(endpoint.clone())
+            .accept(iroh_blobs::ALPN, blobs.clone())
+            .spawn()
+            .await
+            .map_err(|e| format!("Failed to spawn Iroh protocol router: {}", e))?;
+
+        let node = IrohNode {
+            pool: pool.clone(),
+            endpoint,
+            store,
+            blobs,
+            router,
+        };
+
+        *guard = Some(IrohNode {
+            pool: node.pool.clone(),
+            endpoint: node.endpoint.clone(),
+            store: node.store.clone(),
+            blobs: node.blobs.clone(),
+            router: node.router.clone(),
+        });
+
+        Ok(node)
+    }
 }
 
 #[tauri::command]
@@ -21,98 +87,170 @@ async fn start_iroh_share(
         return Err("File path does not exist on local disk".to_string());
     }
 
-    let mut node_guard = state.node.lock().await;
-    
-    // Spawn the Iroh node lazily if it is not already running
-    let node = match &*node_guard {
-        Some(n) => n.clone(),
-        None => {
-            let n = iroh::node::Node::memory()
-                .spawn()
-                .await
-                .map_err(|e| format!("Failed to spawn Iroh node: {}", e))?;
-            *node_guard = Some(n.clone());
-            n
-        }
-    };
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "shared_file".to_string());
 
-    // Add the file to Iroh's in-memory store
-    let outcome = node.blobs
-        .add_from_path(path, iroh_blobs::util::SetTagOption::Auto)
+    let file_size = tokio::fs::metadata(&path)
         .await
-        .map_err(|e| format!("Failed to add file to Iroh blobs: {}", e))?;
+        .map(|m| m.len())
+        .unwrap_or(0);
 
-    // Create a shareable BlobTicket containing hash and node address
-    let ticket = iroh_blobs::ticket::BlobTicket::new(
-        node.endpoint().node_id(),
+    let node = state.get_or_spawn().await?;
+    let client = node.blobs.client();
+
+    let outcome_progress = client
+        .add_from_path(
+            path,
+            false,
+            iroh_blobs::util::SetTagOption::Auto,
+            iroh_blobs::rpc::client::blobs::WrapOption::NoWrap,
+        )
+        .await
+        .map_err(|e| format!("Failed to import file into Iroh blobs: {}", e))?;
+
+    let outcome = outcome_progress
+        .await
+        .map_err(|e| format!("Error during blob import: {}", e))?;
+
+    let node_addr = node
+        .endpoint
+        .node_addr()
+        .await
+        .map_err(|e| format!("Failed to get node address: {}", e))?;
+
+    let ticket = BlobTicket::new(
+        node_addr,
         outcome.hash,
         iroh_blobs::BlobFormat::Raw,
     )
     .map_err(|e| format!("Failed to create Iroh ticket: {}", e))?;
 
-    Ok(ticket.to_string())
+    // Embed the original filename and file size in ticket string so receiver automatically preserves the name & extension
+    Ok(format!("{}#{}#{}", ticket.to_string(), file_name, file_size))
 }
 
 #[tauri::command]
 async fn download_from_iroh(
+    window: Window,
     state: State<'_, IrohState>,
     ticket_str: String,
     output_dir: String,
 ) -> Result<String, String> {
-    let ticket = iroh_blobs::ticket::BlobTicket::from_str(&ticket_str)
-        .map_err(|e| format!("Invalid Iroh ticket: {}", e))?;
-
-    let mut node_guard = state.node.lock().await;
-    
-    // Spawn the node if not running
-    let node = match &*node_guard {
-        Some(n) => n.clone(),
-        None => {
-            let n = iroh::node::Node::memory()
-                .spawn()
-                .await
-                .map_err(|e| format!("Failed to spawn Iroh node: {}", e))?;
-            *node_guard = Some(n.clone());
-            n
-        }
+    let parts: Vec<&str> = ticket_str.split('#').collect();
+    let raw_ticket_str = parts[0].trim();
+    let original_filename = if parts.len() > 1 && !parts[1].trim().is_empty() {
+        Some(parts[1].trim().to_string())
+    } else {
+        None
+    };
+    let expected_size: Option<u64> = if parts.len() > 2 {
+        parts[2].trim().parse().ok()
+    } else {
+        None
     };
 
-    // Download the content from the peer via ticket address
-    let mut progress_stream = node.blobs
+    let ticket = BlobTicket::from_str(raw_ticket_str)
+        .map_err(|e| format!("Invalid Iroh ticket: {}", e))?;
+
+    let node = state.get_or_spawn().await?;
+    let client = node.blobs.client();
+
+    let mut progress_stream = client
         .download(ticket.hash(), ticket.node_addr().clone())
         .await
-        .map_err(|e| format!("Failed to start download stream: {}", e))?;
+        .map_err(|e| format!("Failed to initiate download stream: {}", e))?;
 
-    // Wait for the download stream to finish
+    let start_time = std::time::Instant::now();
+    let mut last_emit = std::time::Instant::now();
+    let mut last_bytes = 0u64;
+    let mut current_bytes = 0u64;
+    let mut total_size = expected_size.unwrap_or(0);
+
+    let _ = window.emit("iroh-progress", IrohProgressPayload {
+        bytes_transferred: 0,
+        total_bytes: total_size,
+        speed_bytes_per_sec: 0.0,
+        percent: 0.0,
+        status: "connecting".to_string(),
+    });
+
     while let Some(msg) = progress_stream.next().await {
-        let _event = msg.map_err(|e| format!("Error in download progress stream: {}", e))?;
+        let event = msg.map_err(|e| format!("Error during download: {}", e))?;
+        use iroh_blobs::get::db::DownloadProgress;
+        match event {
+            DownloadProgress::Found { size, .. } => {
+                if total_size == 0 {
+                    total_size = size;
+                }
+            }
+            DownloadProgress::Progress { offset, .. } => {
+                current_bytes = offset;
+                if last_emit.elapsed() >= std::time::Duration::from_millis(100) {
+                    let dt = last_emit.elapsed().as_secs_f64();
+                    let speed = if dt > 0.0 {
+                        (current_bytes.saturating_sub(last_bytes)) as f64 / dt
+                    } else {
+                        0.0
+                    };
+                    let pct = if total_size > 0 {
+                        ((current_bytes as f64 / total_size as f64) * 100.0).min(99.0)
+                    } else {
+                        50.0
+                    };
+                    let _ = window.emit("iroh-progress", IrohProgressPayload {
+                        bytes_transferred: current_bytes,
+                        total_bytes: total_size,
+                        speed_bytes_per_sec: speed,
+                        percent: pct,
+                        status: "downloading".to_string(),
+                    });
+                    last_emit = std::time::Instant::now();
+                    last_bytes = current_bytes;
+                }
+            }
+            _ => {}
+        }
     }
 
-    // Read the downloaded bytes from the local node store
-    let mut reader = node.blobs
-        .read(ticket.hash())
+    // Read the downloaded bytes from local node store
+    let bytes = client
+        .read_to_bytes(ticket.hash())
         .await
-        .map_err(|e| format!("Failed to read blob from node: {}", e))?;
+        .map_err(|e| format!("Failed to read downloaded blob: {}", e))?;
 
-    let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer)
-        .await
-        .map_err(|e| format!("Failed to extract bytes: {}", e))?;
+    let final_name = original_filename.unwrap_or_else(|| {
+        let file_id_prefix: String = ticket.hash().to_string().chars().take(8).collect();
+        format!("iroh_{}.download", file_id_prefix)
+    });
 
-    // Save the bytes as a physical file on local disk
-    let file_id_prefix: String = ticket.hash().to_string().chars().take(8).collect();
-    let dest_path = PathBuf::from(output_dir).join(format!("iroh_{}.download", file_id_prefix));
-    
-    tokio::fs::write(&dest_path, buffer)
+    let dest_path = PathBuf::from(output_dir).join(&final_name);
+
+    tokio::fs::write(&dest_path, &bytes)
         .await
         .map_err(|e| format!("Failed to write file to destination path: {}", e))?;
+
+    let total_duration = start_time.elapsed().as_secs_f64();
+    let avg_speed = if total_duration > 0.0 {
+        bytes.len() as f64 / total_duration
+    } else {
+        0.0
+    };
+
+    let _ = window.emit("iroh-progress", IrohProgressPayload {
+        bytes_transferred: bytes.len() as u64,
+        total_bytes: bytes.len() as u64,
+        speed_bytes_per_sec: avg_speed,
+        percent: 100.0,
+        status: "completed".to_string(),
+    });
 
     Ok(dest_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
 async fn pick_file_dialog() -> Result<Option<String>, String> {
-    // Open native file selector dialog
     let file = rfd::FileDialog::new()
         .set_title("Select File to Share")
         .pick_file();
@@ -125,7 +263,6 @@ async fn pick_file_dialog() -> Result<Option<String>, String> {
 
 #[tauri::command]
 async fn pick_folder_dialog() -> Result<Option<String>, String> {
-    // Open native folder selector dialog
     let folder = rfd::FileDialog::new()
         .set_title("Select Save Folder")
         .pick_folder();
