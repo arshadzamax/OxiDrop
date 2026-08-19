@@ -55,6 +55,10 @@ function App() {
     irohDownloadTicket,
     isIrohDownloading,
     irohDownloadProgress,
+    irohSpeed,
+    irohTransferredBytes,
+    irohTotalBytes,
+    irohTargetFileName,
     setIrohDownloadTicket,
     pickTauriFile,
     startIrohShare,
@@ -129,6 +133,10 @@ function App() {
                 irohDownloadTicket={irohDownloadTicket}
                 isIrohDownloading={isIrohDownloading}
                 irohDownloadProgress={irohDownloadProgress}
+                irohSpeed={irohSpeed}
+                irohTransferredBytes={irohTransferredBytes}
+                irohTotalBytes={irohTotalBytes}
+                irohTargetFileName={irohTargetFileName}
                 onSetIrohDownloadTicket={setIrohDownloadTicket}
                 onPickTauriFile={pickTauriFile}
                 onStartIrohShare={startIrohShare}

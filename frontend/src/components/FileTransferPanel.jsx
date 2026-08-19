@@ -29,6 +29,10 @@ export function FileTransferPanel({
   irohDownloadTicket,
   isIrohDownloading,
   irohDownloadProgress,
+  irohSpeed = 0,
+  irohTransferredBytes = 0,
+  irohTotalBytes = 0,
+  irohTargetFileName = '',
   onSetIrohDownloadTicket,
   onPickTauriFile,
   onStartIrohShare,
@@ -203,6 +207,20 @@ export function FileTransferPanel({
                   style={{ fontSize: '12px', padding: '8px 12px' }}
                 />
 
+                {/* File Metadata Preview */}
+                {irohTargetFileName && (
+                  <div style={{ background: 'rgba(0, 242, 254, 0.05)', border: '1px solid rgba(0, 242, 254, 0.15)', borderRadius: '8px', padding: '8px 12px', fontSize: '11px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ color: '#fff', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
+                      📄 {irohTargetFileName}
+                    </span>
+                    {irohTotalBytes > 0 && (
+                      <span style={{ color: 'var(--text-3)' }}>
+                        {formatBytes(irohTotalBytes)}
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {!isIrohDownloading && (
                   <button 
                     className="btn btn-secondary btn-full" 
@@ -217,11 +235,33 @@ export function FileTransferPanel({
                 {isIrohDownloading && (
                   <div className="transfer-progress-box">
                     <div className="transfer-progress-header">
-                      <Loader2 size={14} className="spin" />
-                      <span>Downloading from Iroh P2P... {irohDownloadProgress}%</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Loader2 size={14} className="spin" style={{ color: '#00f2fe' }} />
+                        <span style={{ fontWeight: '600', color: '#fff' }}>Downloading...</span>
+                      </div>
+                      <span className="transfer-progress-pct" style={{ color: '#00f2fe', fontWeight: '700' }}>
+                        {irohDownloadProgress}%
+                      </span>
                     </div>
+
                     <div className="progress-track">
-                      <div className="progress-fill" style={{ width: `${irohDownloadProgress}%` }} />
+                      <div 
+                        className="progress-fill" 
+                        style={{ 
+                          width: `${irohDownloadProgress}%`, 
+                          background: 'linear-gradient(90deg, #00f2fe 0%, #0ea5e9 100%)' 
+                        }} 
+                      />
+                    </div>
+
+                    <div className="transfer-metrics" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-2)', marginTop: '8px' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#00f2fe', fontWeight: '700' }}>
+                        <Zap size={12} />
+                        {irohSpeed > 0 ? `${(irohSpeed / (1024 * 1024)).toFixed(2)} MB/s` : 'Connecting...'}
+                      </span>
+                      <span>
+                        {formatBytes(irohTransferredBytes)} {irohTotalBytes > 0 ? `/ ${formatBytes(irohTotalBytes)}` : ''}
+                      </span>
                     </div>
                   </div>
                 )}
