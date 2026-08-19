@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "OxiDrop",
+    "slug": "oxidrop",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -11,17 +11,19 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+        "backgroundColor": "#0b0d13"
+      },
+      "package": "com.arshadzama.mobile"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [
-      "expo-sharing"
-    ]
+    "extra": {
+      "eas": {
+        "projectId": "6c37fe02-e743-4983-9505-35b249945518"
+      }
+    },
+    "owner": "arshadzama"
   }
 }
