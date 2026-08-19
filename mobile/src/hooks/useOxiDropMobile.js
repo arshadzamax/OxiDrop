@@ -25,8 +25,8 @@ const HEARTBEAT_INTERVAL = 25000;
 const RECONNECT_DELAY = 3000;
 const CONNECTION_TIMEOUT = 25000;
 const CHUNK_SIZE = 48 * 1024; // 48KB (exact multiple of 3 for clean Base64 encoding)
-const BACKPRESSURE_HIGH = 1024 * 1024;
-const BACKPRESSURE_LOW = 256 * 1024;
+const BACKPRESSURE_HIGH = 4 * 1024 * 1024;
+const BACKPRESSURE_LOW = 1 * 1024 * 1024;
 const STATS_INTERVAL = 1000;
 
 const isSecure = !SERVER_ADDRESS.startsWith('192.168.') && !SERVER_ADDRESS.includes('localhost') && !SERVER_ADDRESS.includes('127.0.0.1');
@@ -302,20 +302,20 @@ export const useOxiDropMobile = () => {
           offset = chunkEnd;
           fileSentBytes = chunkEnd;
 
-          const progressPercent = Math.min(100, Math.round((fileSentBytes / actualSize) * 100));
-          setSenderProgress(progressPercent);
-
-          const overallSent = sentUploadBytesRef.current + fileSentBytes;
-          const overallPercent = Math.min(100, Math.round((overallSent / totalBytes) * 100));
-          setSenderBatchProgress(overallPercent);
-
           const now = Date.now();
-          if (now - speedTime >= 1000) {
+          if (now - speedTime >= 500) {
             const timeDiffSec = (now - speedTime) / 1000;
+            const overallSent = sentUploadBytesRef.current + fileSentBytes;
             const bytesDiff = overallSent - speedBytes;
             setSenderTransferSpeed(bytesDiff / timeDiffSec);
             speedBytes = overallSent;
             speedTime = now;
+
+            const progressPercent = Math.min(100, Math.round((fileSentBytes / actualSize) * 100));
+            setSenderProgress(progressPercent);
+
+            const overallPercent = Math.min(100, Math.round((overallSent / totalBytes) * 100));
+            setSenderBatchProgress(overallPercent);
           }
         }
 
@@ -504,22 +504,22 @@ export const useOxiDropMobile = () => {
         receiverBytesRef.current += bytes.length;
         receiverBatchReceivedBytesRef.current += bytes.length;
 
-        const currentFileSize = receiverFileMetaRef.current.sizeBytes || 1;
-        const progressPercent = Math.min(100, Math.round((receiverBytesRef.current / currentFileSize) * 100));
-        setReceiverProgress(progressPercent);
-
-        if (receiverBatchTotalBytesRef.current > 0) {
-          const batchPercent = Math.min(100, Math.round((receiverBatchReceivedBytesRef.current / receiverBatchTotalBytesRef.current) * 100));
-          setReceiverBatchProgress(batchPercent);
-        }
-
         const now = Date.now();
-        if (now - receiverSpeedTimeRef.current >= 1000) {
+        if (now - receiverSpeedTimeRef.current >= 500) {
           const timeDiffSec = (now - receiverSpeedTimeRef.current) / 1000;
           const bytesDiff = receiverBytesRef.current - receiverSpeedBytesRef.current;
           setReceiverTransferSpeed(bytesDiff / timeDiffSec);
           receiverSpeedBytesRef.current = receiverBytesRef.current;
           receiverSpeedTimeRef.current = now;
+
+          const currentFileSize = receiverFileMetaRef.current.sizeBytes || 1;
+          const progressPercent = Math.min(100, Math.round((receiverBytesRef.current / currentFileSize) * 100));
+          setReceiverProgress(progressPercent);
+
+          if (receiverBatchTotalBytesRef.current > 0) {
+            const batchPercent = Math.min(100, Math.round((receiverBatchReceivedBytesRef.current / receiverBatchTotalBytesRef.current) * 100));
+            setReceiverBatchProgress(batchPercent);
+          }
         }
       }
     }
