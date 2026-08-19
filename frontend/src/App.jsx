@@ -45,7 +45,20 @@ function App() {
     acceptIncomingFile,
     rejectIncomingFile,
     chatMessages,
-    sendChatMessage
+    sendChatMessage,
+
+    // Iroh states & triggers
+    irohTicket,
+    isIrohSharing,
+    irohSharedFilePath,
+    irohSharedFileName,
+    irohDownloadTicket,
+    isIrohDownloading,
+    irohDownloadProgress,
+    setIrohDownloadTicket,
+    pickTauriFile,
+    startIrohShare,
+    downloadFromIroh
   } = useOxiDrop();
 
   if (view === 'landing') {
@@ -88,7 +101,7 @@ function App() {
               onLeaveRoom={leaveRoom}
             />
 
-            {peerConnected && (
+            {(peerConnected || window.__TAURI_INTERNALS__) && (
               <FileTransferPanel
                 selectedFile={selectedFile}
                 onFileChange={handleFileChange}
@@ -106,6 +119,20 @@ function App() {
                 onRejectFile={rejectIncomingFile}
                 chatMessages={chatMessages}
                 onSendChatMessage={sendChatMessage}
+                peerConnected={peerConnected}
+
+                // Iroh props
+                irohTicket={irohTicket}
+                isIrohSharing={isIrohSharing}
+                irohSharedFilePath={irohSharedFilePath}
+                irohSharedFileName={irohSharedFileName}
+                irohDownloadTicket={irohDownloadTicket}
+                isIrohDownloading={isIrohDownloading}
+                irohDownloadProgress={irohDownloadProgress}
+                onSetIrohDownloadTicket={setIrohDownloadTicket}
+                onPickTauriFile={pickTauriFile}
+                onStartIrohShare={startIrohShare}
+                onDownloadFromIroh={downloadFromIroh}
               />
             )}
           </div>

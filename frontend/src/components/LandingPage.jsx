@@ -103,7 +103,7 @@ export function LandingPage({ onLaunch }) {
           OxiDrop pairs devices via localized rooms to establish secure WebRTC connections. Files stream directly between browsers without intermediate cloud uploads.
         </motion.p>
 
-        <motion.div variants={itemVariants} style={{ display: 'flex', gap: '16px', marginBottom: '32px' }}>
+        <motion.div variants={itemVariants} style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap', justifyContent: 'center' }}>
           <motion.button
             whileHover={{ scale: 1.05, boxShadow: '0 0 25px rgba(14, 165, 233, 0.45)' }}
             whileTap={{ scale: 0.98 }}
@@ -114,6 +114,20 @@ export function LandingPage({ onLaunch }) {
             Launch P2P Dashboard
             <ArrowRight size={16} />
           </motion.button>
+
+          {!window.__TAURI_INTERNALS__ && (
+            <motion.button
+              whileHover={{ scale: 1.05, border: '1px solid rgba(0, 242, 254, 0.5)', background: 'rgba(0, 242, 254, 0.05)' }}
+              whileTap={{ scale: 0.98 }}
+              className="btn btn-secondary"
+              onClick={() => {
+                alert("OxiDrop Desktop Client Installer (.msi/.dmg) is ready for compilation!\nRun `npm run tauri build` in the frontend directory to produce your local installer binary.\n\nBenefits:\n- Native Iroh P2P protocol\n- Speeds up to 1+ Gbps\n- No browser timeouts or tab sleep issues");
+              }}
+              style={{ padding: '14px 28px', fontSize: '15px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '8px', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.08)', backdropFilter: 'blur(10px)', color: '#fff', cursor: 'pointer' }}
+            >
+              Download Desktop App
+            </motion.button>
+          )}
         </motion.div>
 
         {/* Live P2P Connection Simulator */}

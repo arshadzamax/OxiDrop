@@ -6,6 +6,16 @@ import { sanitizeFileName, formatBytes } from '../utils/helpers';
  * Handles sender file chunking, receiver file assembly, File System Access API writing,
  * backpressure flow control, progress states, and speed calculations.
  */
+const isTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
+let invoke = () => Promise.reject("Not running inside Tauri context");
+if (isTauri) {
+  import('@tauri-apps/api/core').then(m => {
+    invoke = m.invoke;
+  }).catch(err => {
+    console.error("Failed to load Tauri core invoke client:", err);
+  });
+}
+
 export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cleanupWebRTC }) {
   // Sender state
   const [selectedFile, setSelectedFile] = useState(null);
@@ -22,6 +32,84 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
   // Connection metadata prompts
   const [incomingFileOffer, setIncomingFileOffer] = useState(null);
   const [fileOfferPending, setFileOfferPending] = useState(false);
+
+  // Iroh Native P2P states (Tauri-only)
+  const [irohTicket, setIrohTicket] = useState('');
+  const [isIrohSharing, setIsIrohSharing] = useState(false);
+  const [irohSharedFilePath, setIrohSharedFilePath] = useState('');
+  const [irohSharedFileName, setIrohSharedFileName] = useState('');
+
+  const [irohDownloadTicket, setIrohDownloadTicket] = useState('');
+  const [isIrohDownloading, setIsIrohDownloading] = useState(false);
+  const [irohDownloadProgress, setIrohDownloadProgress] = useState(0);
+
+  const pickTauriFile = async () => {
+    try {
+      addDevLog('Opening native file dialog...', 'system');
+      const path = await invoke('pick_file_dialog');
+      if (path) {
+        setIrohSharedFilePath(path);
+        const filename = path.split(/[\\/]/).pop();
+        setIrohSharedFileName(filename);
+        addDevLog(`Selected file for Iroh sharing: ${path}`, 'system');
+      }
+    } catch (err) {
+      addDevLog('File dialog error: ' + err, 'error');
+    }
+  };
+
+  const startIrohShare = async () => {
+    if (!irohSharedFilePath) {
+      addNotification('Please select a file first.', 'error');
+      return;
+    }
+    setIsIrohSharing(true);
+    addDevLog(`Starting Iroh share for file: ${irohSharedFilePath}`, 'stream');
+    try {
+      const ticket = await invoke('start_iroh_share', { filePath: irohSharedFilePath });
+      setIrohTicket(ticket);
+      addDevLog('Iroh sharing active. Share Ticket generated!', 'stream');
+      addNotification('Iroh transfer ticket generated successfully!', 'success');
+    } catch (err) {
+      addDevLog('Iroh share failed: ' + err, 'error');
+      addNotification('Failed to generate Iroh ticket.', 'error');
+      setIsIrohSharing(false);
+    }
+  };
+
+  const downloadFromIroh = async () => {
+    if (!irohDownloadTicket) {
+      addNotification('Please paste an Iroh ticket.', 'error');
+      return;
+    }
+    setIsIrohDownloading(true);
+    setIrohDownloadProgress(10);
+    addDevLog('Pasting ticket and initiating Iroh download...', 'stream');
+    try {
+      addDevLog('Opening native save directory dialog...', 'system');
+      const outputDir = await invoke('pick_folder_dialog');
+      if (!outputDir) {
+        addDevLog('Download cancelled: No save directory selected.', 'system');
+        setIsIrohDownloading(false);
+        return;
+      }
+      
+      addDevLog(`Starting download. Storing in: ${outputDir}`, 'stream');
+      setIrohDownloadProgress(30);
+      const destFile = await invoke('download_from_iroh', { 
+        ticketStr: irohDownloadTicket.trim(), 
+        outputDir 
+      });
+      setIrohDownloadProgress(100);
+      addDevLog(`Iroh download finished! File saved to: ${destFile}`, 'stream');
+      addNotification('File downloaded successfully via Iroh!', 'success');
+    } catch (err) {
+      addDevLog('Iroh download failed: ' + err, 'error');
+      addNotification('Failed to download from Iroh.', 'error');
+    } finally {
+      setIsIrohDownloading(false);
+    }
+  };
 
   // Refs for tracking mutable data across asynchronous stream events
   const selectedFileRef = useRef(null);
@@ -351,6 +439,21 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     sendFile,
     acceptIncomingFile,
     rejectIncomingFile,
-    handleDataChannelMessage
+    handleDataChannelMessage,
+    
+    // Iroh states
+    irohTicket,
+    isIrohSharing,
+    irohSharedFilePath,
+    irohSharedFileName,
+    irohDownloadTicket,
+    isIrohDownloading,
+    irohDownloadProgress,
+    
+    // Iroh triggers
+    setIrohDownloadTicket,
+    pickTauriFile,
+    startIrohShare,
+    downloadFromIroh
   };
 }
