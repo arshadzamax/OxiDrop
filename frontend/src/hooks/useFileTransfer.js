@@ -42,6 +42,53 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
   const [irohDownloadTicket, setIrohDownloadTicket] = useState('');
   const [isIrohDownloading, setIsIrohDownloading] = useState(false);
   const [irohDownloadProgress, setIrohDownloadProgress] = useState(0);
+  const [irohSpeed, setIrohSpeed] = useState(0); // in bytes/sec
+  const [irohTransferredBytes, setIrohTransferredBytes] = useState(0);
+  const [irohTotalBytes, setIrohTotalBytes] = useState(0);
+  const [irohTargetFileName, setIrohTargetFileName] = useState('');
+
+  // Listen for real-time Iroh progress events from Tauri Rust backend
+  useEffect(() => {
+    if (!isTauri) return;
+    let unlistenFn = null;
+    import('@tauri-apps/api/event').then(m => {
+      m.listen('iroh-progress', (event) => {
+        const { bytes_transferred, total_bytes, speed_bytes_per_sec, percent, status } = event.payload || {};
+        if (typeof percent === 'number') {
+          setIrohDownloadProgress(Math.min(100, Math.max(0, Math.round(percent))));
+        }
+        if (typeof bytes_transferred === 'number') {
+          setIrohTransferredBytes(bytes_transferred);
+        }
+        if (typeof total_bytes === 'number' && total_bytes > 0) {
+          setIrohTotalBytes(total_bytes);
+        }
+        if (typeof speed_bytes_per_sec === 'number') {
+          setIrohSpeed(speed_bytes_per_sec);
+        }
+      }).then(unlisten => {
+        unlistenFn = unlisten;
+      });
+    }).catch(err => console.error("Failed to setup Tauri event listener:", err));
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
+
+  const handleSetIrohDownloadTicket = (val) => {
+    setIrohDownloadTicket(val);
+    if (val && val.includes('#')) {
+      const parts = val.split('#');
+      if (parts[1]) setIrohTargetFileName(parts[1].trim());
+      if (parts[2]) {
+        const size = parseInt(parts[2].trim(), 10);
+        if (!isNaN(size) && size > 0) setIrohTotalBytes(size);
+      }
+    } else {
+      setIrohTargetFileName('');
+    }
+  };
 
   const pickTauriFile = async () => {
     try {
@@ -68,7 +115,7 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     try {
       const ticket = await invoke('start_iroh_share', { filePath: irohSharedFilePath });
       setIrohTicket(ticket);
-      addDevLog('Iroh sharing active. Share Ticket generated!', 'stream');
+      addDevLog('Iroh sharing active. Share Ticket generated with filename metadata!', 'stream');
       addNotification('Iroh transfer ticket generated successfully!', 'success');
     } catch (err) {
       addDevLog('Iroh share failed: ' + err, 'error');
@@ -83,7 +130,9 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
       return;
     }
     setIsIrohDownloading(true);
-    setIrohDownloadProgress(10);
+    setIrohDownloadProgress(0);
+    setIrohSpeed(0);
+    setIrohTransferredBytes(0);
     addDevLog('Pasting ticket and initiating Iroh download...', 'stream');
     try {
       addDevLog('Opening native save directory dialog...', 'system');
@@ -95,17 +144,16 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
       }
       
       addDevLog(`Starting download. Storing in: ${outputDir}`, 'stream');
-      setIrohDownloadProgress(30);
       const destFile = await invoke('download_from_iroh', { 
         ticketStr: irohDownloadTicket.trim(), 
         outputDir 
       });
       setIrohDownloadProgress(100);
-      addDevLog(`Iroh download finished! File saved to: ${destFile}`, 'stream');
+      addDevLog(`Iroh download finished! File saved with original extension to: ${destFile}`, 'stream');
       addNotification('File downloaded successfully via Iroh!', 'success');
     } catch (err) {
       addDevLog('Iroh download failed: ' + err, 'error');
-      addNotification('Failed to download from Iroh.', 'error');
+      addNotification('Failed to download from Iroh: ' + err, 'error');
     } finally {
       setIsIrohDownloading(false);
     }
@@ -126,7 +174,10 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
   const receiverSpeedBytesRef = useRef(0);
   const receiverSpeedTimeRef = useRef(performance.now());
   const receiverLastLoggedPctRef = useRef(-1);
+  const receiverLastProgressTimeRef = useRef(0);
   const receiverWriteQueueRef = useRef(Promise.resolve());
+  const receiverWriteBufferRef = useRef([]);
+  const receiverWriteBufferSizeRef = useRef(0);
 
   const resetTransferState = () => {
     setSelectedFile(null);
@@ -147,6 +198,9 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     receiverBytesRef.current = 0;
     receiverSpeedBytesRef.current = 0;
     receiverLastLoggedPctRef.current = -1;
+    receiverLastProgressTimeRef.current = 0;
+    receiverWriteBufferRef.current = [];
+    receiverWriteBufferSizeRef.current = 0;
     receiverWriteQueueRef.current = Promise.resolve();
   };
 
@@ -155,32 +209,50 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     receiverBytesRef.current += data.byteLength;
     receiverSpeedBytesRef.current += data.byteLength;
     const now = performance.now();
-    if (now - receiverSpeedTimeRef.current >= 1000) {
-      setReceiverTransferSpeed(((receiverSpeedBytesRef.current / (1024 * 1024)) / ((now - receiverSpeedTimeRef.current) / 1000)).toFixed(2));
+
+    // Throttle speed calculation to once every 500ms
+    if (now - receiverSpeedTimeRef.current >= 500) {
+      const elapsed = (now - receiverSpeedTimeRef.current) / 1000;
+      setReceiverTransferSpeed(((receiverSpeedBytesRef.current / (1024 * 1024)) / elapsed).toFixed(2));
       receiverSpeedBytesRef.current = 0;
       receiverSpeedTimeRef.current = now;
     }
 
     const meta = receiverFileMetaRef.current;
     if (!meta) return;
-    const progressPct = Math.round((receiverBytesRef.current / meta.sizeBytes) * 100);
-    setReceiverProgress(progressPct);
 
-    if (progressPct % 10 === 0 && progressPct !== receiverLastLoggedPctRef.current) {
-      addDevLog(`Received chunk: ${formatBytes(receiverBytesRef.current)} / ${formatBytes(meta.sizeBytes)} (${progressPct}%)`, 'stream');
-      receiverLastLoggedPctRef.current = progressPct;
+    // Throttle React progress state updates: update every 100ms or on completion
+    if (now - receiverLastProgressTimeRef.current >= 100 || receiverBytesRef.current >= meta.sizeBytes) {
+      const progressPct = Math.round((receiverBytesRef.current / meta.sizeBytes) * 100);
+      setReceiverProgress(progressPct);
+      receiverLastProgressTimeRef.current = now;
+
+      if (progressPct % 10 === 0 && progressPct !== receiverLastLoggedPctRef.current) {
+        addDevLog(`Received chunk: ${formatBytes(receiverBytesRef.current)} / ${formatBytes(meta.sizeBytes)} (${progressPct}%)`, 'stream');
+        receiverLastLoggedPctRef.current = progressPct;
+      }
     }
 
     if (fileWritableRef.current) {
-      const chunkData = data;
-      receiverWriteQueueRef.current = receiverWriteQueueRef.current.then(async () => {
-        try {
-          await fileWritableRef.current.write(chunkData);
-        } catch (err) {
-          addDevLog('Failed direct disk write chunk: ' + err.message, 'error');
-          console.error('Failed streaming chunk directly to disk path:', err);
-        }
-      });
+      // Buffer chunks up to 2MB before flushing to disk stream to minimize disk IPC
+      receiverWriteBufferRef.current.push(data);
+      receiverWriteBufferSizeRef.current += data.byteLength;
+
+      if (receiverWriteBufferSizeRef.current >= 2 * 1024 * 1024) {
+        const chunksToWrite = receiverWriteBufferRef.current;
+        receiverWriteBufferRef.current = [];
+        receiverWriteBufferSizeRef.current = 0;
+
+        const blob = new Blob(chunksToWrite);
+        receiverWriteQueueRef.current = receiverWriteQueueRef.current.then(async () => {
+          try {
+            await fileWritableRef.current.write(blob);
+          } catch (err) {
+            addDevLog('Failed direct disk write chunk: ' + err.message, 'error');
+            console.error('Failed streaming chunk directly to disk path:', err);
+          }
+        });
+      }
     } else {
       receiverBufRef.current.push(data);
     }
@@ -211,6 +283,20 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     addDevLog('All file bytes received successfully. Saving file...', 'stream');
 
     if (fileWritableRef.current) {
+      // Flush any remaining buffered chunks
+      if (receiverWriteBufferRef.current.length > 0) {
+        const remainingBlob = new Blob(receiverWriteBufferRef.current);
+        receiverWriteBufferRef.current = [];
+        receiverWriteBufferSizeRef.current = 0;
+        receiverWriteQueueRef.current = receiverWriteQueueRef.current.then(async () => {
+          try {
+            await fileWritableRef.current.write(remainingBlob);
+          } catch (err) {
+            console.error('Error writing final chunk:', err);
+          }
+        });
+      }
+
       receiverWriteQueueRef.current = receiverWriteQueueRef.current.then(async () => {
         try {
           await fileWritableRef.current.close();
@@ -240,28 +326,36 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     receiverBytesRef.current = 0;
     receiverSpeedBytesRef.current = 0;
     receiverLastLoggedPctRef.current = -1;
+    receiverLastProgressTimeRef.current = 0;
   };
 
   // ── Sender: Pipeline Stream Loops (Async Pipelined Chunking) ──
   const startFileStreaming = async (dc) => {
     if (!selectedFileRef.current) return;
     const file = selectedFileRef.current;
-    const chunkSize = 65536; // 64KB
+    const chunkSize = 65536; // 64KB (Optimal WebRTC packet)
+    const readBatchSize = 1024 * 1024; // 1MB batch read from disk
     let currentOffset = 0;
     let bytesSent = 0;
     let lastTime = performance.now();
+    let lastProgressTime = 0;
     let lastLoggedPct = -1;
 
-    addDevLog(`Starting file stream: ${file.name} (${formatBytes(file.size)})`, 'stream');
+    addDevLog(`Starting high-speed file stream: ${file.name} (${formatBytes(file.size)})`, 'stream');
 
-    // Configure WebRTC low buffer threshold to trigger native event-based resumes
-    dc.bufferedAmountLowThreshold = 256 * 1024; // 256KB
+    // High throughput WebRTC buffer settings
+    // 2MB low threshold & 8MB high ceiling to prevent SCTP pipe starvation
+    const BUFFER_LOW_THRESHOLD = 2 * 1024 * 1024; // 2MB
+    const BUFFER_HIGH_CEILING = 8 * 1024 * 1024;   // 8MB
+
+    dc.bufferedAmountLowThreshold = BUFFER_LOW_THRESHOLD;
     dc.onbufferedamountlow = () => {
       stream();
     };
 
-    let isStreaming = false; // Thread-safe async execution lock to prevent parallel loop race conditions
-    let isCompleted = false; // Thread-safe completion lock to prevent duplicate completions
+    let isStreaming = false; // Thread-safe async execution lock
+    let isCompleted = false; // Thread-safe completion lock
+
     const stream = async () => {
       if (dc.readyState !== 'open') return;
       if (isCompleted) return;
@@ -270,51 +364,71 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
 
       try {
         while (currentOffset < file.size) {
-          // Flow control: WebRTC bufferedAmount check
-          // Keep the buffer saturated to around 1MB (16 chunks of 64KB) for maximum network throughput
-          if (dc.bufferedAmount > 1024 * 1024) {
-            // Buffer is full. Exit and wait for onbufferedamountlow to fire.
-            return;
+          // Flow control: keep WebRTC buffer full up to 8MB without overflowing
+          if (dc.bufferedAmount > BUFFER_HIGH_CEILING) {
+            return; // Wait for onbufferedamountlow to fire
           }
 
-          const slice = file.slice(currentOffset, currentOffset + chunkSize);
-          const chunk = await slice.arrayBuffer();
+          // Read a 1MB batch from disk in one async operation
+          const batchEnd = Math.min(currentOffset + readBatchSize, file.size);
+          const batchSlice = file.slice(currentOffset, batchEnd);
+          const batchBuffer = await batchSlice.arrayBuffer();
 
           if (dc.readyState !== 'open') return;
-          dc.send(chunk);
 
-          currentOffset += chunk.byteLength;
-          bytesSent += chunk.byteLength;
+          // Slice and send 64KB chunks from the in-memory batch buffer
+          let batchOffset = 0;
+          while (batchOffset < batchBuffer.byteLength) {
+            if (dc.bufferedAmount > BUFFER_HIGH_CEILING) {
+              break; // Yield and wait for onbufferedamountlow
+            }
 
-          const now = performance.now();
-          if (now - lastTime >= 1000) {
-            setSenderTransferSpeed(((bytesSent / (1024 * 1024)) / ((now - lastTime) / 1000)).toFixed(2));
-            bytesSent = 0;
-            lastTime = now;
-          }
+            const chunkEnd = Math.min(batchOffset + chunkSize, batchBuffer.byteLength);
+            const chunk = batchBuffer.slice(batchOffset, chunkEnd);
+            dc.send(chunk);
 
-          const progressPct = Math.round((currentOffset / file.size) * 100);
-          setSenderProgress(progressPct);
+            const sentBytes = chunk.byteLength;
+            batchOffset += sentBytes;
+            currentOffset += sentBytes;
+            bytesSent += sentBytes;
 
-          if (progressPct % 10 === 0 && progressPct !== lastLoggedPct) {
-            addDevLog(`Sent chunk: ${formatBytes(currentOffset)} / ${formatBytes(file.size)} (${progressPct}%)`, 'stream');
-            lastLoggedPct = progressPct;
+            const now = performance.now();
+            if (now - lastTime >= 500) {
+              const elapsed = (now - lastTime) / 1000;
+              setSenderTransferSpeed(((bytesSent / (1024 * 1024)) / elapsed).toFixed(2));
+              bytesSent = 0;
+              lastTime = now;
+            }
+
+            // Throttle UI progress update to 100ms
+            if (now - lastProgressTime >= 100 || currentOffset >= file.size) {
+              const progressPct = Math.round((currentOffset / file.size) * 100);
+              setSenderProgress(progressPct);
+              lastProgressTime = now;
+
+              if (progressPct % 10 === 0 && progressPct !== lastLoggedPct) {
+                addDevLog(`Sent chunk: ${formatBytes(currentOffset)} / ${formatBytes(file.size)} (${progressPct}%)`, 'stream');
+                lastLoggedPct = progressPct;
+              }
+            }
           }
         }
 
-        // De-register the listener so the event doesn't fire again
-        dc.onbufferedamountlow = null;
-        isCompleted = true;
+        if (currentOffset >= file.size) {
+          // De-register listener
+          dc.onbufferedamountlow = null;
+          isCompleted = true;
 
-        // All chunks sent, signal completion
-        setSenderProgress(100);
-        addDevLog('All file chunks pushed. Sending file_complete signal.', 'stream');
-        try {
-          dc.send(JSON.stringify({ type: 'file_complete' }));
-        } catch {}
-        setIsUploading(false);
-        setSenderTransferSpeed(0);
-        addNotification('File sent successfully!', 'success');
+          // All chunks sent, signal completion
+          setSenderProgress(100);
+          addDevLog('All file chunks pushed. Sending file_complete signal.', 'stream');
+          try {
+            dc.send(JSON.stringify({ type: 'file_complete' }));
+          } catch {}
+          setIsUploading(false);
+          setSenderTransferSpeed(0);
+          addNotification('File sent successfully!', 'success');
+        }
       } catch (e) {
         addDevLog('Failed to send chunk via WebRTC: ' + e.message, 'error');
         console.error('Failed to send chunk via WebRTC:', e);
@@ -449,9 +563,13 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     irohDownloadTicket,
     isIrohDownloading,
     irohDownloadProgress,
+    irohSpeed,
+    irohTransferredBytes,
+    irohTotalBytes,
+    irohTargetFileName,
     
     // Iroh triggers
-    setIrohDownloadTicket,
+    setIrohDownloadTicket: handleSetIrohDownloadTicket,
     pickTauriFile,
     startIrohShare,
     downloadFromIroh
