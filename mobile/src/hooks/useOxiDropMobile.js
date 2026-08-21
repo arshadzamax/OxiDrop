@@ -29,7 +29,7 @@ const BACKPRESSURE_HIGH = 4 * 1024 * 1024;
 const BACKPRESSURE_LOW = 1 * 1024 * 1024;
 const STATS_INTERVAL = 1000;
 
-const isSecure = !SERVER_ADDRESS.startsWith('192.168.') && !SERVER_ADDRESS.includes('localhost') && !SERVER_ADDRESS.includes('127.0.0.1');
+const isSecure = !SERVER_ADDRESS.startsWith('192.168.') && !SERVER_ADDRESS.startsWith('10.') && !SERVER_ADDRESS.includes('localhost') && !SERVER_ADDRESS.includes('127.0.0.1');
 const API_HOST = isSecure ? `https://${SERVER_ADDRESS}` : `http://${SERVER_ADDRESS}`;
 const WS_HOST = isSecure ? `wss://${SERVER_ADDRESS}` : `ws://${SERVER_ADDRESS}`;
 

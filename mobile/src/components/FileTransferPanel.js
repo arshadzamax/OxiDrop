@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, Platform } from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet, Platform, NativeModules } from 'react-native';
 import {
   UploadCloud,
   Download,
@@ -12,6 +12,8 @@ import {
   Plus,
   Send,
   MessageSquare,
+  Copy,
+  Check,
   X
 } from 'lucide-react-native';
 import { formatBytes } from '../utils/helpers';
@@ -44,6 +46,7 @@ export const FileTransferPanel = ({
   onSendChatMessage,
 }) => {
   const [chatInput, setChatInput] = useState('');
+  const [copiedMsgId, setCopiedMsgId] = useState(null);
 
   const filesList = selectedFiles && selectedFiles.length > 0
     ? selectedFiles
@@ -52,6 +55,19 @@ export const FileTransferPanel = ({
       : [];
 
   const totalSelectedSize = filesList.reduce((acc, f) => acc + (f.size || 0), 0);
+
+  const handleCopyMessage = async (text, id) => {
+    if (!text) return;
+    try {
+      if (NativeModules.IrohModule?.copyToClipboard) {
+        await NativeModules.IrohModule.copyToClipboard(text);
+      }
+    } catch (e) {
+      // Ignore copy error
+    }
+    setCopiedMsgId(id);
+    setTimeout(() => setCopiedMsgId(null), 2000);
+  };
 
   const handleSendChat = () => {
     if (!chatInput.trim()) return;
@@ -359,9 +375,12 @@ export const FileTransferPanel = ({
               <View style={styles.messagesList}>
                 {chatMessages.map((msg) => {
                   const isMe = msg.sender === 'me';
+                  const isCopied = copiedMsgId === msg.id;
                   return (
-                    <View
+                    <Pressable
                       key={msg.id}
+                      onPress={() => handleCopyMessage(msg.text, msg.id)}
+                      onLongPress={() => handleCopyMessage(msg.text, msg.id)}
                       style={[
                         styles.chatBubble,
                         isMe
@@ -369,13 +388,26 @@ export const FileTransferPanel = ({
                           : [styles.chatBubblePeer, { backgroundColor: colors.cardBg, borderColor: colors.cardBorder }]
                       ]}
                     >
+                      <View style={styles.chatHeaderRow}>
+                        <Text style={[styles.chatTime, { color: isMe ? 'rgba(255,255,255,0.7)' : colors.textMuted }]}>
+                          {msg.time}
+                        </Text>
+                        <Pressable
+                          onPress={() => handleCopyMessage(msg.text, msg.id)}
+                          hitSlop={8}
+                          style={styles.chatCopyBtn}
+                        >
+                          {isCopied ? (
+                            <Check size={11} color={isMe ? '#fff' : '#10B981'} />
+                          ) : (
+                            <Copy size={11} color={isMe ? 'rgba(255,255,255,0.7)' : colors.textMuted} />
+                          )}
+                        </Pressable>
+                      </View>
                       <Text style={[styles.chatText, { color: isMe ? '#fff' : colors.textPrimary }]}>
                         {msg.text}
                       </Text>
-                      <Text style={[styles.chatTime, { color: isMe ? 'rgba(255,255,255,0.7)' : colors.textMuted }]}>
-                        {msg.time}
-                      </Text>
-                    </View>
+                    </Pressable>
                   );
                 })}
               </View>
@@ -620,14 +652,23 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     borderWidth: 1,
   },
+  chatHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+    gap: 8,
+  },
+  chatCopyBtn: {
+    padding: 2,
+    borderRadius: 4,
+  },
   chatText: {
     fontSize: 12,
     lineHeight: 16,
   },
   chatTime: {
     fontSize: 9,
-    marginTop: 2,
-    textAlign: 'right',
   },
   chatInputRow: {
     flexDirection: 'row',
