@@ -46,11 +46,21 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
   const [irohTransferredBytes, setIrohTransferredBytes] = useState(0);
   const [irohTotalBytes, setIrohTotalBytes] = useState(0);
   const [irohTargetFileName, setIrohTargetFileName] = useState('');
+  const [irohTelemetry, setIrohTelemetry] = useState({
+    active: false,
+    state: 'idle',
+    nodeId: '',
+    relayUrl: null,
+    transport: 'None',
+    latencyMs: null,
+  });
 
-  // Listen for real-time Iroh progress events from Tauri Rust backend
+  // Listen for real-time Iroh progress, log, and telemetry events from Tauri Rust backend
   useEffect(() => {
     if (!isTauri) return;
-    let unlistenFn = null;
+    let unlistenProgress = null;
+    let unlistenLog = null;
+    let unlistenTelemetry = null;
     import('@tauri-apps/api/event').then(m => {
       m.listen('iroh-progress', (event) => {
         const { bytes_transferred, total_bytes, speed_bytes_per_sec, percent, status } = event.payload || {};
@@ -67,14 +77,43 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
           setIrohSpeed(speed_bytes_per_sec);
         }
       }).then(unlisten => {
-        unlistenFn = unlisten;
+        unlistenProgress = unlisten;
+      });
+
+      m.listen('iroh-log', (event) => {
+        const logMsg = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload);
+        if (logMsg && addDevLog) {
+          addDevLog(`[Iroh] ${logMsg}`, 'stream');
+        }
+      }).then(unlisten => {
+        unlistenLog = unlisten;
+      });
+
+      m.listen('iroh-telemetry', (event) => {
+        const payload = event.payload || {};
+        const isActive = payload.state !== 'idle' && payload.state !== 'completed' && payload.state !== 'failed';
+        setIrohTelemetry({
+          active: isActive,
+          state: payload.state || 'active',
+          nodeId: payload.node_id || '',
+          relayUrl: payload.relay_url || null,
+          transport: payload.transport || 'QUIC',
+          latencyMs: payload.latency_ms || null,
+        });
+        if (payload.log && addDevLog) {
+          addDevLog(`[Iroh Telemetry] ${payload.state.toUpperCase()}: ${payload.log}`, 'stream');
+        }
+      }).then(unlisten => {
+        unlistenTelemetry = unlisten;
       });
     }).catch(err => console.error("Failed to setup Tauri event listener:", err));
 
     return () => {
-      if (unlistenFn) unlistenFn();
+      if (unlistenProgress) unlistenProgress();
+      if (unlistenLog) unlistenLog();
+      if (unlistenTelemetry) unlistenTelemetry();
     };
-  }, []);
+  }, [addDevLog]);
 
   const handleSetIrohDownloadTicket = (val) => {
     setIrohDownloadTicket(val);
@@ -98,11 +137,32 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
         setIrohSharedFilePath(path);
         const filename = path.split(/[\\/]/).pop();
         setIrohSharedFileName(filename);
+        setIrohTicket('');
+        setIsIrohSharing(false);
         addDevLog(`Selected file for Iroh sharing: ${path}`, 'system');
       }
     } catch (err) {
       addDevLog('File dialog error: ' + err, 'error');
     }
+  };
+
+  const resetIrohShare = () => {
+    setIrohSharedFilePath('');
+    setIrohSharedFileName('');
+    setIrohTicket('');
+    setIsIrohSharing(false);
+    addDevLog('Reset Iroh share state', 'system');
+  };
+
+  const resetIrohDownload = () => {
+    setIrohDownloadTicket('');
+    setIrohTargetFileName('');
+    setIrohTotalBytes(0);
+    setIrohDownloadProgress(0);
+    setIrohSpeed(0);
+    setIrohTransferredBytes(0);
+    setIsIrohDownloading(false);
+    addDevLog('Reset Iroh download state', 'system');
   };
 
   const startIrohShare = async () => {
@@ -120,6 +180,7 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     } catch (err) {
       addDevLog('Iroh share failed: ' + err, 'error');
       addNotification('Failed to generate Iroh ticket.', 'error');
+    } finally {
       setIsIrohSharing(false);
     }
   };
@@ -567,11 +628,14 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     irohTransferredBytes,
     irohTotalBytes,
     irohTargetFileName,
+    irohTelemetry,
     
     // Iroh triggers
     setIrohDownloadTicket: handleSetIrohDownloadTicket,
     pickTauriFile,
     startIrohShare,
-    downloadFromIroh
+    downloadFromIroh,
+    resetIrohShare,
+    resetIrohDownload
   };
 }

@@ -89,20 +89,20 @@ export function useOxiDrop() {
     }
 
     const host = typeof window !== 'undefined' ? window.location.host : 'localhost:5173';
-    const isSecure = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    const isLocalWeb = host.includes('localhost:5173') || host.includes('127.0.0.1:5173');
 
-    // If running locally in development, default to local port 5000
-    if (host.includes('localhost') || host.includes('127.0.0.1')) {
+    // If running in local Vite dev server specifically without Tauri, use local 5000
+    if (isLocalWeb) {
       return {
-        api: import.meta.env.VITE_API_HOST || 'http://localhost:5000',
-        ws: import.meta.env.VITE_WS_HOST || 'ws://localhost:5000'
+        api: 'http://localhost:5000',
+        ws: 'ws://localhost:5000'
       };
     }
 
-    // In production, default to co-locating with the current domain and match HTTPS/WSS secure protocols
+    // Default to the deployed production Render signaling server for Tauri Desktop & Production Web
     return {
-      api: import.meta.env.VITE_API_HOST || `${window.location.protocol}//${host}`,
-      ws: import.meta.env.VITE_WS_HOST || `${isSecure ? 'wss:' : 'ws:'}//${host}`
+      api: 'https://oxidrop-signaling-server.onrender.com',
+      ws: 'wss://oxidrop-signaling-server.onrender.com'
     };
   };
 
