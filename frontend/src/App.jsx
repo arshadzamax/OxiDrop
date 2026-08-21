@@ -59,10 +59,13 @@ function App() {
     irohTransferredBytes,
     irohTotalBytes,
     irohTargetFileName,
+    irohTelemetry,
     setIrohDownloadTicket,
     pickTauriFile,
     startIrohShare,
-    downloadFromIroh
+    downloadFromIroh,
+    resetIrohShare,
+    resetIrohDownload
   } = useOxiDrop();
 
   if (view === 'landing') {
@@ -141,6 +144,8 @@ function App() {
                 onPickTauriFile={pickTauriFile}
                 onStartIrohShare={startIrohShare}
                 onDownloadFromIroh={downloadFromIroh}
+                onResetIrohShare={resetIrohShare}
+                onResetIrohDownload={resetIrohDownload}
               />
             )}
           </div>
@@ -160,17 +165,25 @@ function App() {
           webrtcStats={webrtcStats}
           isUploading={isUploading}
           isDownloading={isDownloading}
+          irohTelemetry={irohTelemetry}
         />
       )}
 
       <TelemetryPanel
         isTransferring={isUploading || isDownloading}
-        transferMode={isUploading ? 'upload' : 'download'}
+        transferMode={isUploading || isIrohSharing ? 'upload' : 'download'}
         fileName={isUploading ? selectedFile?.name : receiverFileMeta?.fileName}
         progress={isUploading ? senderProgress : receiverProgress}
         speed={isUploading ? senderTransferSpeed : receiverTransferSpeed}
         totalSize={isUploading ? selectedFile?.size : receiverFileMeta?.sizeBytes}
         webrtcStats={webrtcStats}
+        irohTelemetry={irohTelemetry}
+        isIrohTransferring={isIrohDownloading || isIrohSharing}
+        irohFileName={isIrohSharing ? irohSharedFileName : (irohTargetFileName || 'Iroh QUIC File')}
+        irohProgress={isIrohDownloading ? irohDownloadProgress : (isIrohSharing ? (irohTicket ? 100 : 0) : 0)}
+        irohSpeed={irohSpeed}
+        irohTotalSize={irohTotalBytes}
+        irohTransferred={irohTransferredBytes}
       />
     </div>
   );
