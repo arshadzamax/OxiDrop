@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UploadCloud, Download, Zap, CheckCircle, Loader2, Copy, Shield, Cpu } from 'lucide-react';
+import { UploadCloud, Download, Zap, CheckCircle, Loader2, Copy, Check, Shield, Cpu } from 'lucide-react';
 import { formatBytes } from '../utils/helpers';
 
 export function FileTransferPanel({
@@ -29,17 +29,25 @@ export function FileTransferPanel({
   irohDownloadTicket,
   isIrohDownloading,
   irohDownloadProgress,
+  irohDownloadSpeed,
   irohSpeed = 0,
   irohTransferredBytes = 0,
   irohTotalBytes = 0,
-  irohTargetFileName = '',
+  irohDownloadedFilePath,
+  irohTargetFileName,
   onSetIrohDownloadTicket,
   onPickTauriFile,
+  onPickIrohShareFile,
   onStartIrohShare,
-  onDownloadFromIroh
+  onDownloadFromIroh,
+  onResetIrohShare,
+  onResetIrohDownload
 }) {
   const [chatInput, setChatInput] = useState('');
+  const [copiedChatIdx, setCopiedChatIdx] = useState(null);
   const isTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
+  
+  const handlePickFile = onPickTauriFile || onPickIrohShareFile;
   
   // Default to native Iroh transfers when inside the Tauri Desktop client!
   const [transferMode, setTransferMode] = useState(isTauri ? 'iroh' : 'webrtc');
@@ -50,6 +58,13 @@ export function FileTransferPanel({
     navigator.clipboard.writeText(irohTicket);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyChatMsg = (text, idx) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedChatIdx(idx);
+    setTimeout(() => setCopiedChatIdx(null), 2000);
   };
 
   return (
@@ -130,7 +145,7 @@ export function FileTransferPanel({
 
               <div 
                 className="dropzone has-file" 
-                onClick={onPickTauriFile}
+                onClick={handlePickFile}
                 style={{ cursor: 'pointer', borderStyle: irohSharedFilePath ? 'solid' : 'dashed', borderColor: irohSharedFilePath ? 'rgba(0, 242, 254, 0.3)' : 'var(--border)' }}
               >
                 <div className="dropzone-icon">
@@ -183,8 +198,15 @@ export function FileTransferPanel({
                     style={{ width: '100%', height: '60px', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px', color: 'var(--text-2)', fontSize: '10px', fontFamily: 'monospace', padding: '6px', resize: 'none' }}
                   />
                   <div style={{ color: 'var(--text-3)', fontSize: '10px', marginTop: '6px', textAlign: 'center', fontStyle: 'italic' }}>
-                    Send this ticket to another OxiDrop Desktop client to begin transfer.
+                    Send this ticket to another OxiDrop client to begin transfer.
                   </div>
+                  <button 
+                    className="btn btn-secondary btn-full" 
+                    onClick={onResetIrohShare} 
+                    style={{ marginTop: '10px', fontSize: '11px', padding: '6px 10px' }}
+                  >
+                    Share Another File
+                  </button>
                 </div>
               )}
             </div>
@@ -197,15 +219,27 @@ export function FileTransferPanel({
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <input
-                  type="text"
-                  placeholder="Paste Iroh Share Ticket here..."
-                  value={irohDownloadTicket}
-                  onChange={(e) => onSetIrohDownloadTicket(e.target.value)}
-                  className="input"
-                  disabled={isIrohDownloading}
-                  style={{ fontSize: '12px', padding: '8px 12px' }}
-                />
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    type="text"
+                    placeholder="Paste Iroh Share Ticket here..."
+                    value={irohDownloadTicket}
+                    onChange={(e) => onSetIrohDownloadTicket(e.target.value)}
+                    className="input"
+                    disabled={isIrohDownloading}
+                    style={{ fontSize: '12px', padding: '8px 12px', flex: 1 }}
+                  />
+                  {irohDownloadTicket ? (
+                    <button
+                      className="btn btn-ghost"
+                      onClick={onResetIrohDownload}
+                      disabled={isIrohDownloading}
+                      style={{ padding: '0 10px', fontSize: '11px' }}
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
 
                 {/* File Metadata Preview */}
                 {irohTargetFileName && (
@@ -229,6 +263,16 @@ export function FileTransferPanel({
                   >
                     <Download size={14} />
                     Download File Natively
+                  </button>
+                )}
+
+                {!isIrohDownloading && irohDownloadProgress === 100 && (
+                  <button 
+                    className="btn btn-ghost btn-full" 
+                    onClick={onResetIrohDownload}
+                    style={{ fontSize: '11px', marginTop: '4px' }}
+                  >
+                    Download Another File
                   </button>
                 )}
 
@@ -442,18 +486,42 @@ export function FileTransferPanel({
                         flexDirection: 'column',
                         alignItems: m.senderId === 'You' ? 'flex-end' : 'flex-start'
                       }}>
-                        <div style={{ display: 'flex', gap: '6px', color: 'var(--text-3)', marginBottom: '2px', fontSize: '9px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-3)', marginBottom: '2px', fontSize: '9px' }}>
                           <strong>{m.senderId}</strong>
                           <span>[{m.time}]</span>
+                          <button
+                            onClick={() => handleCopyChatMsg(m.text, idx)}
+                            title="Copy message"
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              padding: '1px 3px',
+                              cursor: 'pointer',
+                              color: copiedChatIdx === idx ? 'var(--green, #10b981)' : 'var(--text-3)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '2px',
+                              fontSize: '9px',
+                              borderRadius: '3px'
+                            }}
+                          >
+                            {copiedChatIdx === idx ? <Check size={10} /> : <Copy size={10} />}
+                            {copiedChatIdx === idx ? <span>Copied</span> : null}
+                          </button>
                         </div>
-                        <div style={{ 
-                          background: m.senderId === 'You' ? 'var(--accent)' : 'var(--bg-hover)', 
-                          color: m.senderId === 'You' ? '#fff' : 'var(--text)', 
-                          padding: '6px 10px', 
-                          borderRadius: 'var(--radius)',
-                          maxWidth: '80%',
-                          wordBreak: 'break-all'
-                        }}>
+                        <div 
+                          onClick={() => handleCopyChatMsg(m.text, idx)}
+                          title="Click to copy message"
+                          style={{ 
+                            background: m.senderId === 'You' ? 'var(--accent)' : 'var(--bg-hover)', 
+                            color: m.senderId === 'You' ? '#fff' : 'var(--text)', 
+                            padding: '6px 10px', 
+                            borderRadius: 'var(--radius)',
+                            maxWidth: '80%',
+                            wordBreak: 'break-word',
+                            cursor: 'pointer'
+                          }}
+                        >
                           {m.text}
                         </div>
                       </div>

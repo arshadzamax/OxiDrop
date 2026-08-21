@@ -12,7 +12,8 @@ export function DeveloperConsole({
   peerConnected,
   webrtcStats,
   isUploading,
-  isDownloading
+  isDownloading,
+  irohTelemetry
 }) {
   const scrollRef = useRef(null);
 
@@ -25,6 +26,7 @@ export function DeveloperConsole({
   // Color code each category for premium terminal aesthetics
   const getCategoryColor = (category) => {
     switch (category) {
+      case 'iroh': return '#00f2fe'; // cyan
       case 'signaling': return '#3b82f6'; // blue
       case 'ice': return '#eab308'; // yellow
       case 'webrtc': return '#a855f7'; // purple
@@ -99,6 +101,15 @@ export function DeveloperConsole({
           </div>
         ))}
       </div>
+
+      {irohTelemetry && (irohTelemetry.nodeId || irohTelemetry.active) && (
+        <div className="dev-console-stats" style={{ borderTop: '1px solid rgba(0, 242, 254, 0.2)', backgroundColor: 'rgba(0, 242, 254, 0.04)' }}>
+          <span className="stat-pill" style={{ borderColor: 'rgba(0, 242, 254, 0.4)', color: '#00f2fe' }}>Iroh Node: <strong>{irohTelemetry.nodeId.slice(0, 10)}...</strong></span>
+          <span className="stat-pill">Iroh State: <strong>{irohTelemetry.state}</strong></span>
+          <span className="stat-pill">Transport: <strong>{irohTelemetry.transport}</strong></span>
+          {irohTelemetry.relayUrl && <span className="stat-pill">Relay: <strong>Connected</strong></span>}
+        </div>
+      )}
 
       {peerConnected && webrtcStats && webrtcStats.active && (
         <div className="dev-console-stats">
