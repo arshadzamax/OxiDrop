@@ -27,3 +27,6 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Release Artifacts Staging
+release_artifacts/
