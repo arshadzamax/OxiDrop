@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { sanitizeFileName, formatBytes } from '../utils/helpers';
-import { isOpfsSupported, createOpfsTempWriter, saveOpfsFileToDownloads } from '../utils/opfsStorage';
+import { isOpfsSupported, createOpfsTempWriter, saveOpfsFileToDownloads, cleanupOpfsTempFile } from '../utils/opfsStorage';
 
 /**
  * useFileTransfer — A custom hook to isolate WebRTC file transfer logic.
@@ -242,6 +242,22 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
   const receiverWriteBufferRef = useRef([]);
   const receiverWriteBufferSizeRef = useRef(0);
 
+  // Clean up any lingering OPFS or disk write handles on unmount
+  useEffect(() => {
+    return () => {
+      if (fileWritableRef.current) {
+        try {
+          fileWritableRef.current.abort().catch(() => {});
+        } catch {
+          // ignore abort error on unmount
+        }
+      }
+      if (opfsContextRef.current) {
+        cleanupOpfsTempFile(opfsContextRef.current).catch(() => {});
+      }
+    };
+  }, []);
+
   const resetTransferState = () => {
     setSelectedFile(null);
     setSenderProgress(0);
@@ -256,7 +272,21 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     setIncomingFileOffer(null);
     setFileOfferPending(false);
 
-    fileWritableRef.current = null;
+    if (fileWritableRef.current) {
+      try {
+        fileWritableRef.current.abort().catch(() => {});
+      } catch {
+        // Stream may already be closed
+      }
+      fileWritableRef.current = null;
+    }
+
+    if (opfsContextRef.current) {
+      const opfsCtx = opfsContextRef.current;
+      opfsContextRef.current = null;
+      cleanupOpfsTempFile(opfsCtx).catch(() => {});
+    }
+
     receiverBufRef.current = [];
     receiverBytesRef.current = 0;
     receiverSpeedBytesRef.current = 0;
@@ -603,6 +633,7 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     addDevLog('Rejecting incoming file offer.', 'stream');
     dc.send(JSON.stringify({ type: 'file_reject' }));
     setIncomingFileOffer(null);
+    resetTransferState();
   };
 
   // ── DataChannel Router (relays chunk data and triggers UI states) ──
