@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { sanitizeFileName, formatBytes } from '../utils/helpers';
-import { isOpfsSupported, createOpfsTempWriter, saveOpfsFileToDownloads, cleanupOpfsTempFile } from '../utils/opfsStorage';
+import {
+  isOpfsSupported,
+  createOpfsTempWriter,
+  saveOpfsFileToDownloads,
+  cleanupOpfsTempFile,
+  cleanStaleOpfsTempFiles,
+} from '../utils/opfsStorage';
 
 /**
  * useFileTransfer — A custom hook to isolate WebRTC file transfer logic.
@@ -242,6 +248,15 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
   const receiverWriteBufferRef = useRef([]);
   const receiverWriteBufferSizeRef = useRef(0);
 
+  // On mount, sweep any stale OPFS temporary transfer files from prior sessions
+  useEffect(() => {
+    cleanStaleOpfsTempFiles().then(cleaned => {
+      if (cleaned > 0 && addDevLog) {
+        addDevLog(`Swept ${cleaned} orphaned OPFS temporary file(s) from previous session.`, 'system');
+      }
+    }).catch(() => {});
+  }, [addDevLog]);
+
   // Clean up any lingering OPFS or disk write handles on unmount
   useEffect(() => {
     return () => {
@@ -377,7 +392,21 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
         const opfsContext = await createOpfsTempWriter(fileName);
         fileWritableRef.current = opfsContext.writable;
         opfsContextRef.current = opfsContext;
-        addDevLog(`OPFS sandboxed stream initialized (${opfsContext.tempFileName}). Zero RAM overhead mode active.`, 'stream');
+
+        let quotaInfo = '';
+        if (navigator.storage && typeof navigator.storage.estimate === 'function') {
+          try {
+            const estimate = await navigator.storage.estimate();
+            if (estimate.quota) {
+              const available = Math.max(0, estimate.quota - (estimate.usage || 0));
+              quotaInfo = ` (Quota free: ${formatBytes(available)})`;
+            }
+          } catch {
+            // Storage estimate not available
+          }
+        }
+
+        addDevLog(`OPFS sandboxed stream initialized (${opfsContext.tempFileName})${quotaInfo}. Zero-RAM streaming active.`, 'stream');
         return;
       } catch (err) {
         console.warn('OPFS initialization failed. Falling back to in-memory buffering.', err);
