@@ -73,10 +73,17 @@ export function useOxiDrop() {
   const remoteIceCandidatesQueueRef = useRef([]);
   const heartbeatIntervalRef = useRef(null);
   const resetTransferStateRef = useRef(null);
+  const iceConfigurationRef = useRef({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+  });
 
   useEffect(() => { peerIdRef.current = peerId; }, [peerId]);
   useEffect(() => { roomCodeRef.current = roomCode; }, [roomCode]);
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
+  useEffect(() => { iceConfigurationRef.current = iceConfiguration; }, [iceConfiguration]);
 
   // Host configuration resolution loaded automatically by Vite, fallback dynamically auto-detects protocol/domain in production
   const getHosts = () => {
@@ -123,7 +130,9 @@ export function useOxiDrop() {
         if (res.ok) {
           const config = await res.json();
           console.log('Fetched ICE servers from signaling server:', config.iceServers);
-          setIceConfiguration({ iceServers: config.iceServers });
+          const newConfig = { iceServers: config.iceServers };
+          iceConfigurationRef.current = newConfig;
+          setIceConfiguration(newConfig);
 
           // Verify if TURN servers were loaded successfully
           const servers = config.iceServers || [];
@@ -464,7 +473,12 @@ export function useOxiDrop() {
     try {
       cleanupWebRTC();
       addDevLog('Creating RTCPeerConnection as host...', 'webrtc');
-      const pc = new RTCPeerConnection(iceConfiguration);
+      const rtcConfig = {
+        ...(iceConfigurationRef.current || iceConfiguration),
+        iceCandidatePoolSize: 10,
+        bundlePolicy: 'max-bundle',
+      };
+      const pc = new RTCPeerConnection(rtcConfig);
       peerConnRef.current = pc;
       startConnectionTimeout();
       startStatsMonitoring(pc);
@@ -577,7 +591,12 @@ export function useOxiDrop() {
     try {
       cleanupWebRTC();
       addDevLog('Creating RTCPeerConnection as joiner...', 'webrtc');
-      const pc = new RTCPeerConnection(iceConfiguration);
+      const rtcConfig = {
+        ...(iceConfigurationRef.current || iceConfiguration),
+        iceCandidatePoolSize: 10,
+        bundlePolicy: 'max-bundle',
+      };
+      const pc = new RTCPeerConnection(rtcConfig);
       peerConnRef.current = pc;
       startConnectionTimeout();
       startStatsMonitoring(pc);
