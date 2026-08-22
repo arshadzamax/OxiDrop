@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { sanitizeFileName, formatBytes } from '../utils/helpers';
-import { isOpfsSupported, createOpfsTempWriter } from '../utils/opfsStorage';
+import { isOpfsSupported, createOpfsTempWriter, saveOpfsFileToDownloads } from '../utils/opfsStorage';
 
 /**
  * useFileTransfer — A custom hook to isolate WebRTC file transfer logic.
@@ -389,13 +389,27 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
 
       receiverWriteQueueRef.current = receiverWriteQueueRef.current.then(async () => {
         try {
-          await fileWritableRef.current.close();
-          fileWritableRef.current = null;
-          addDevLog('Direct disk file writer closed successfully.', 'stream');
+          const currentWritable = fileWritableRef.current;
+          if (currentWritable) {
+            await currentWritable.close();
+            fileWritableRef.current = null;
+          }
+
+          if (opfsContextRef.current) {
+            const opfsCtx = opfsContextRef.current;
+            opfsContextRef.current = null;
+            addDevLog('Exporting OPFS sandboxed file to browser downloads...', 'stream');
+            await saveOpfsFileToDownloads(opfsCtx, meta.fileName);
+            addDevLog('Triggered browser download from OPFS disk-backed file and reclaimed sandboxed space.', 'stream');
+          } else {
+            addDevLog('Direct disk file writer closed successfully.', 'stream');
+          }
+
           addNotification('File downloaded successfully!', 'success');
         } catch (err) {
-          addDevLog('Error closing local file descriptor: ' + err.message, 'error');
-          console.error('Failed to close local file descriptor:', err);
+          addDevLog('Error finalizing file download: ' + err.message, 'error');
+          console.error('Failed to finalize file download:', err);
+          addNotification('Failed to save file: ' + err.message, 'error');
         }
       });
     } else {
