@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { sanitizeFileName, formatBytes } from '../utils/helpers';
+import { isOpfsSupported, createOpfsTempWriter } from '../utils/opfsStorage';
 
 /**
  * useFileTransfer — A custom hook to isolate WebRTC file transfer logic.
@@ -224,6 +225,7 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
   const selectedFileRef = useRef(null);
   const receiverFileMetaRef = useRef(null);
   const fileWritableRef = useRef(null);
+  const opfsContextRef = useRef(null);
 
   // Keep refs up-to-date with state values
   useEffect(() => { selectedFileRef.current = selectedFile; }, [selectedFile]);
@@ -319,18 +321,45 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     }
   };
 
-  const promptSaveLocation = async (fileName) => {
+  const setupReceiverStorage = async (fileName) => {
+    // Tier 1: Native File System Access API (Desktop Chromium)
     if ('showSaveFilePicker' in window) {
       try {
         const handle = await window.showSaveFilePicker({
           suggestedName: fileName,
         });
         fileWritableRef.current = await handle.createWritable();
+        opfsContextRef.current = null;
+        addDevLog('Direct disk file stream initialized via showSaveFilePicker.', 'stream');
+        return;
       } catch (err) {
-        console.warn('Save file picker cancelled or failed. Falling back to browser memory buffer.', err);
-        fileWritableRef.current = null;
+        if (err.name === 'AbortError') {
+          addDevLog('Save picker cancelled by user. Falling back to OPFS disk storage.', 'stream');
+        } else {
+          console.warn('showSaveFilePicker failed. Falling back to OPFS.', err);
+        }
       }
     }
+
+    // Tier 2: Origin Private File System (OPFS for Safari, Firefox, Mobile Chrome)
+    if (isOpfsSupported()) {
+      try {
+        const opfsContext = await createOpfsTempWriter(fileName);
+        fileWritableRef.current = opfsContext.writable;
+        opfsContextRef.current = opfsContext;
+        addDevLog(`OPFS sandboxed stream initialized (${opfsContext.tempFileName}). Zero RAM overhead mode active.`, 'stream');
+        return;
+      } catch (err) {
+        console.warn('OPFS initialization failed. Falling back to in-memory buffering.', err);
+        addDevLog('OPFS unavailable: ' + err.message + '. Falling back to in-memory buffer.', 'system');
+      }
+    }
+
+    // Tier 3: In-Memory ArrayBuffer buffer fallback
+    fileWritableRef.current = null;
+    opfsContextRef.current = null;
+    receiverBufRef.current = [];
+    addDevLog('Using in-memory buffer fallback for incoming file.', 'system');
   };
 
   const finalizeReceivedFile = async () => {
@@ -548,7 +577,7 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     setIsDownloading(true);
     setReceiverProgress(0);
 
-    await promptSaveLocation(offer.name);
+    await setupReceiverStorage(offer.name);
 
     addDevLog('Sending file_accept response to peer.', 'stream');
     dc.send(JSON.stringify({ type: 'file_accept' }));
