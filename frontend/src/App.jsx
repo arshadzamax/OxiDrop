@@ -41,6 +41,7 @@ function App() {
     joinRoom,
     leaveRoom,
     handleFileChange,
+    clearSelectedFile,
     sendFile,
     acceptIncomingFile,
     rejectIncomingFile,
@@ -112,6 +113,7 @@ function App() {
               <FileTransferPanel
                 selectedFile={selectedFile}
                 onFileChange={handleFileChange}
+                onClearSelectedFile={clearSelectedFile}
                 onSendFile={sendFile}
                 senderProgress={senderProgress}
                 senderTransferSpeed={senderTransferSpeed}

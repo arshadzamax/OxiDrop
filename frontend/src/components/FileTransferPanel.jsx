@@ -5,6 +5,7 @@ import { formatBytes } from '../utils/helpers';
 export function FileTransferPanel({
   selectedFile,
   onFileChange,
+  onClearSelectedFile,
   onSendFile,
   senderProgress,
   senderTransferSpeed,
@@ -336,6 +337,30 @@ export function FileTransferPanel({
                   <>
                     <div className="dropzone-label">{selectedFile.name}</div>
                     <div className="dropzone-hint">{formatBytes(selectedFile.size)}</div>
+                    {onClearSelectedFile && !isUploading && !fileOfferPending && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClearSelectedFile();
+                        }}
+                        style={{
+                          marginTop: '8px',
+                          background: 'rgba(239, 68, 68, 0.1)',
+                          border: '1px solid rgba(239, 68, 68, 0.25)',
+                          color: 'var(--red)',
+                          padding: '3px 10px',
+                          borderRadius: '6px',
+                          fontSize: '11px',
+                          cursor: 'pointer',
+                          fontWeight: '500',
+                          position: 'relative',
+                          zIndex: 2
+                        }}
+                      >
+                        Remove file
+                      </button>
+                    )}
                   </>
                 ) : (
                   <>
@@ -350,9 +375,14 @@ export function FileTransferPanel({
               </div>
 
               {selectedFile && !isUploading && !fileOfferPending && senderProgress < 100 && (
-                <button className="btn btn-primary btn-full" onClick={onSendFile} style={{ marginTop: '12px' }}>
+                <button
+                  className="btn btn-primary btn-full"
+                  onClick={onSendFile}
+                  disabled={!peerConnected}
+                  style={{ marginTop: '12px', opacity: peerConnected ? 1 : 0.75 }}
+                >
                   <Zap size={14} />
-                  Send to Peer
+                  {peerConnected ? 'Send to Peer' : 'Reconnecting to peer...'}
                 </button>
               )}
 
