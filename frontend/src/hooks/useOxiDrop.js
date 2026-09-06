@@ -37,6 +37,12 @@ export function useOxiDrop() {
   const [peerConnected, setPeerConnected] = useState(false);
   const [peerId, setPeerId] = useState('');
   const [connectionError, setConnectionError] = useState(null);
+  const [iceConfiguration, setIceConfiguration] = useState({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+  });
 
   const [chatMessages, setChatMessages] = useState([]);
 
@@ -117,14 +123,6 @@ export function useOxiDrop() {
   };
 
   const { api: API_HOST, ws: WS_HOST } = getHosts();
-
-  // Dynamic ICE server configurations
-  const [iceConfiguration, setIceConfiguration] = useState({
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
-    ]
-  });
 
   useEffect(() => {
     const fetchIceServers = async () => {
