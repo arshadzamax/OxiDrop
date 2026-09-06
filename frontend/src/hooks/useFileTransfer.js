@@ -7,6 +7,8 @@ import {
   cleanupOpfsTempFile,
   cleanStaleOpfsTempFiles,
 } from '../utils/opfsStorage';
+import { FEATURE_FLAGS } from '../config/features';
+
 
 /**
  * useFileTransfer — A custom hook to isolate WebRTC file transfer logic.
@@ -273,8 +275,20 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     };
   }, []);
 
-  const resetTransferState = () => {
+  const clearSelectedFile = () => {
     setSelectedFile(null);
+    setSenderProgress(0);
+    setSenderTransferSpeed(0);
+    setIsUploading(false);
+    setFileOfferPending(false);
+    if (addDevLog) addDevLog('Selected file cleared.', 'system');
+  };
+
+  const resetTransferState = (options = {}) => {
+    const shouldKeepFile = options.keepSelectedFile ?? FEATURE_FLAGS.PERSIST_SELECTED_FILE_ON_DISCONNECT;
+    if (!shouldKeepFile) {
+      setSelectedFile(null);
+    }
     setSenderProgress(0);
     setSenderTransferSpeed(0);
     setIsUploading(false);
@@ -311,6 +325,7 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     receiverWriteBufferSizeRef.current = 0;
     receiverWriteQueueRef.current = Promise.resolve();
   };
+
 
   // ── Receiver: Chunk Accumulator & disk writer ──
   const handleReceiveChunk = (data) => {
@@ -713,6 +728,7 @@ export function useFileTransfer({ dataChannelRef, addDevLog, addNotification, cl
     incomingFileOffer,
     fileOfferPending,
     resetTransferState,
+    clearSelectedFile,
     handleFileChange,
     sendFile,
     acceptIncomingFile,
