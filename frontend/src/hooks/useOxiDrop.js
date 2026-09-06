@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useFileTransfer } from './useFileTransfer';
+import { FEATURE_FLAGS } from '../config/features';
 
 export function useOxiDrop() {
   const [userId] = useState(() => {
@@ -73,6 +74,8 @@ export function useOxiDrop() {
   const remoteIceCandidatesQueueRef = useRef([]);
   const heartbeatIntervalRef = useRef(null);
   const resetTransferStateRef = useRef(null);
+  const disconnectGraceTimeoutRef = useRef(null);
+  const wakeLockRef = useRef(null);
   const iceConfigurationRef = useRef({
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
@@ -194,9 +197,27 @@ export function useOxiDrop() {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
+        addDevLog('Tab became active. Verifying connection & Wake Lock...', 'signaling');
+
+        // Re-acquire Screen Wake Lock if peer is connected (iOS Safari & Android drop lock on tab hide)
+        if (peerConnected) {
+          requestWakeLock();
+        }
+
+        // Reconnect WebSocket if closed while in background
         if (!socketRef.current || socketRef.current.readyState === WebSocket.CLOSED || socketRef.current.readyState === WebSocket.CLOSING) {
           addDevLog('Page became active. Reconnecting WebSocket immediately...', 'signaling');
           connectWebSocket();
+        } else if (socketRef.current.readyState === WebSocket.OPEN) {
+          // Immediately send keepalive ping to reset proxy idle timeouts
+          socketRef.current.send(JSON.stringify({ type: 'ping' }));
+        }
+
+        // Check if WebRTC failed while away and attempt ICE restart if Host
+        const pc = peerConnRef.current;
+        if (pc && pc.connectionState === 'failed' && FEATURE_FLAGS.ENABLE_ICE_RESTART_ON_FAILED && isHostRef.current && pc.signalingState === 'stable') {
+          addDevLog('WebRTC marked failed while tab was hidden. Triggering automatic ICE restart...', 'webrtc');
+          attemptIceRestart(pc);
         }
       }
     };
@@ -208,7 +229,8 @@ export function useOxiDrop() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleVisibilityChange);
     };
-  }, []);
+  }, [peerConnected]);
+
 
   const connectWebSocket = () => {
     // Clear any pending automatic reconnect timeout
@@ -303,14 +325,66 @@ export function useOxiDrop() {
     };
   };
 
-  const resetTransferState = () => {
-    setChatMessages([]);
-    if (resetTransferStateRef.current) {
-      resetTransferStateRef.current();
+  const clearDisconnectGraceTimeout = () => {
+    if (disconnectGraceTimeoutRef.current) {
+      clearTimeout(disconnectGraceTimeoutRef.current);
+      disconnectGraceTimeoutRef.current = null;
     }
   };
 
-  function cleanupWebRTC() {
+  const startDisconnectGraceTimeout = (callback, delayMs) => {
+    clearDisconnectGraceTimeout();
+    disconnectGraceTimeoutRef.current = setTimeout(callback, delayMs);
+  };
+
+  const requestWakeLock = async () => {
+    if (!FEATURE_FLAGS.ENABLE_SCREEN_WAKE_LOCK) return;
+    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
+    try {
+      if (!wakeLockRef.current || wakeLockRef.current.released) {
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
+        addDevLog('Screen Wake Lock acquired.', 'system');
+        wakeLockRef.current.addEventListener('release', () => {
+          addDevLog('Screen Wake Lock released.', 'system');
+        });
+      }
+    } catch (err) {
+      // Browser may reject if battery saver is on or tab is not active
+      console.warn('Screen Wake Lock request failed:', err);
+    }
+  };
+
+  const releaseWakeLock = async () => {
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+      } catch {}
+      wakeLockRef.current = null;
+    }
+  };
+
+  // Sync wake lock with peerConnected state
+  useEffect(() => {
+    if (peerConnected) {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+    return () => {
+      releaseWakeLock();
+    };
+  }, [peerConnected]);
+
+  const resetTransferState = (options = {}) => {
+    setChatMessages([]);
+    if (resetTransferStateRef.current) {
+      resetTransferStateRef.current(options);
+    }
+  };
+
+  function cleanupWebRTC(options = {}) {
+    clearDisconnectGraceTimeout();
+    releaseWakeLock();
     remoteIceCandidatesQueueRef.current = [];
     if (statsIntervalRef.current) {
       clearInterval(statsIntervalRef.current);
@@ -337,7 +411,71 @@ export function useOxiDrop() {
       peerConnRef.current = null;
     }
     if (resetTransferStateRef.current) {
-      resetTransferStateRef.current();
+      resetTransferStateRef.current(options);
+    }
+  };
+
+  const attemptIceRestart = async (pc) => {
+    if (!FEATURE_FLAGS.ENABLE_ICE_RESTART_ON_FAILED) return false;
+    if (!pc || pc.signalingState === 'closed') return false;
+    try {
+      addDevLog('Attempting in-place WebRTC ICE restart on failed state...', 'ice');
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN && peerIdRef.current) {
+        socketRef.current.send(JSON.stringify({
+          type: 'send_offer',
+          data: { toUserId: peerIdRef.current, offer: pc.localDescription.sdp }
+        }));
+        addDevLog('Dispatched ICE restart offer to peer.', 'ice');
+        return true;
+      }
+    } catch (err) {
+      addDevLog('ICE restart attempt failed: ' + err.message + '. Falling back to full teardown.', 'error');
+    }
+    return false;
+  };
+
+  const handleConnectionStateChange = async (pc) => {
+    addDevLog('WebRTC Peer connection state changed: ' + pc.connectionState, 'webrtc');
+    if (pc.connectionState === 'connected') {
+      clearConnectionTimeout();
+      clearDisconnectGraceTimeout();
+      setConnectionError(null);
+      setPeerConnected(true);
+      requestWakeLock();
+    } else if (pc.connectionState === 'disconnected') {
+      if (FEATURE_FLAGS.WEBRTC_DISCONNECT_GRACE_PERIOD_MS > 0) {
+        addDevLog(`Transient WebRTC disconnect detected. Entering ${FEATURE_FLAGS.WEBRTC_DISCONNECT_GRACE_PERIOD_MS}ms grace period...`, 'webrtc');
+        startDisconnectGraceTimeout(() => {
+          addDevLog('WebRTC disconnect grace period expired without recovery.', 'webrtc');
+          cleanupWebRTC({ keepSelectedFile: true });
+          setPeerConnected(false);
+          setConnectionError('failed');
+        }, FEATURE_FLAGS.WEBRTC_DISCONNECT_GRACE_PERIOD_MS);
+      } else {
+        clearConnectionTimeout();
+        cleanupWebRTC({ keepSelectedFile: true });
+        setPeerConnected(false);
+        setConnectionError('failed');
+      }
+    } else if (pc.connectionState === 'failed') {
+      clearConnectionTimeout();
+      clearDisconnectGraceTimeout();
+      let restarted = false;
+      if (isHostRef.current && pc.signalingState === 'stable') {
+        restarted = await attemptIceRestart(pc);
+      }
+      if (!restarted) {
+        cleanupWebRTC({ keepSelectedFile: true });
+        setPeerConnected(false);
+        setConnectionError('failed');
+      }
+    } else if (pc.connectionState === 'closed') {
+      clearConnectionTimeout();
+      clearDisconnectGraceTimeout();
+      cleanupWebRTC({ keepSelectedFile: true });
+      setPeerConnected(false);
     }
   };
 
@@ -345,8 +483,13 @@ export function useOxiDrop() {
   const startConnectionTimeout = () => {
     clearConnectionTimeout();
     connectionTimeoutRef.current = setTimeout(() => {
+      // Do not abort connection if user is currently backgrounded picking a file
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        addDevLog('Connection timeout deferred: tab is currently in background.', 'webrtc');
+        return;
+      }
       addDevLog('WebRTC connection establishment timed out (25s limit reached).', 'error');
-      cleanupWebRTC();
+      cleanupWebRTC({ keepSelectedFile: true });
       setPeerConnected(false);
       setConnectionError('timeout');
       addNotification('Connection timed out. Please check firewall or network compatibility.', 'error');
@@ -359,6 +502,7 @@ export function useOxiDrop() {
       connectionTimeoutRef.current = null;
     }
   };
+
 
   const startStatsMonitoring = (pc) => {
     if (statsIntervalRef.current) clearInterval(statsIntervalRef.current);
@@ -500,21 +644,7 @@ export function useOxiDrop() {
         }
       };
 
-      pc.onconnectionstatechange = () => {
-        addDevLog('WebRTC Peer connection state changed: ' + pc.connectionState, 'webrtc');
-        if (pc.connectionState === 'connected') {
-          clearConnectionTimeout();
-          setConnectionError(null);
-        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
-          const prevState = pc.connectionState;
-          clearConnectionTimeout();
-          cleanupWebRTC();
-          setPeerConnected(false);
-          if (prevState === 'failed' || prevState === 'disconnected') {
-            setConnectionError('failed');
-          }
-        }
-      };
+      pc.onconnectionstatechange = () => handleConnectionStateChange(pc);
 
       addDevLog('Creating WebRTC Data Channel: file-transfer', 'webrtc');
       const dc = pc.createDataChannel('file-transfer', { ordered: true });
@@ -589,7 +719,26 @@ export function useOxiDrop() {
 
   const handleReceiveOffer = async (sdpOffer, senderId) => {
     try {
-      cleanupWebRTC();
+      clearDisconnectGraceTimeout();
+      const existingPc = peerConnRef.current;
+      if (
+        FEATURE_FLAGS.ENABLE_ICE_RESTART_ON_FAILED &&
+        existingPc &&
+        existingPc.signalingState === 'stable' &&
+        peerIdRef.current === senderId
+      ) {
+        addDevLog('Applying ICE restart offer on existing RTCPeerConnection...', 'webrtc');
+        await existingPc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sdpOffer }));
+        await processQueuedIceCandidates();
+        const answer = await existingPc.createAnswer();
+        await existingPc.setLocalDescription(answer);
+        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+          socketRef.current.send(JSON.stringify({ type: 'send_answer', data: { toUserId: senderId, answer: existingPc.localDescription.sdp } }));
+        }
+        return;
+      }
+
+      cleanupWebRTC({ keepSelectedFile: true });
       addDevLog('Creating RTCPeerConnection as joiner...', 'webrtc');
       const rtcConfig = {
         ...(iceConfigurationRef.current || iceConfiguration),
@@ -618,21 +767,7 @@ export function useOxiDrop() {
         }
       };
 
-      pc.onconnectionstatechange = () => {
-        addDevLog('WebRTC Peer connection state changed: ' + pc.connectionState, 'webrtc');
-        if (pc.connectionState === 'connected') {
-          clearConnectionTimeout();
-          setConnectionError(null);
-        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
-          const prevState = pc.connectionState;
-          clearConnectionTimeout();
-          cleanupWebRTC();
-          setPeerConnected(false);
-          if (prevState === 'failed' || prevState === 'disconnected') {
-            setConnectionError('failed');
-          }
-        }
-      };
+      pc.onconnectionstatechange = () => handleConnectionStateChange(pc);
 
       pc.ondatachannel = (event) => {
         const dc = event.channel;
@@ -670,7 +805,7 @@ export function useOxiDrop() {
       addDevLog('Error setting up WebRTC connection: ' + err.message, 'error');
       console.error('Error in handleReceiveOffer:', err);
       clearConnectionTimeout();
-      cleanupWebRTC();
+      cleanupWebRTC({ keepSelectedFile: true });
       setPeerConnected(false);
       addNotification('Failed to establish WebRTC connection: ' + err.message, 'error');
     }
